@@ -1,119 +1,382 @@
 package com.custom.os;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
-import android.os.Build;
-import android.provider.Settings;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.database.Cursor;
-import android.graphics.Typeface;
+import android.graphics.*;
+import android.graphics.drawable.*;
+import android.media.AudioFormat;
+import android.media.AudioManager;
+import android.media.AudioTrack;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.*;
 import java.util.*;
 
+/** COs 1.0 - launcher neon : intro, menu Cocoon/COs, accueil avec apps, reglages */
 public class MainActivity extends Activity {
     static final int PICK = 1, HOME_REQ = 2;
-    static final int BLUE = 0xFF0B1FA0, FG = 0xFFCFD9FF;
-    LinearLayout root;
+    static final int DARK = 0xFF05030F;
+    static final int[][] THEMES = {
+        {0xFF00E5FF, 0xFFD500F9}, {0xFF39FF14, 0xFF00E5FF},
+        {0xFFFF9100, 0xFFFF1744}, {0xFF7C4DFF, 0xFF18FFFF}};
+    static boolean introDone = false;
 
+    SharedPreferences sp;
+    int C1, C2;
+    FrameLayout stage, content;
+    NeonBg bg;
+    Bitmap logo;
+    boolean inIntro = false, askPending = false;
+    String screen = "";
+    final Handler ui = new Handler(Looper.getMainLooper());
+
+    static class AppItem { String label, pkg, cls; ResolveInfo ri; Drawable icon; }
+
+    // ---------------------------------------------------------------- cycle de vie
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
-        menu();
-        if (b == null && !isHome()) askHome();
-    }
-
-    boolean isHome() {
-        try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                android.app.role.RoleManager rm = (android.app.role.RoleManager) getSystemService(Context.ROLE_SERVICE);
-                return rm.isRoleHeld(android.app.role.RoleManager.ROLE_HOME);
-            }
-            ResolveInfo r = getPackageManager().resolveActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0);
-            return r != null && getPackageName().equals(r.activityInfo.packageName);
-        } catch (Exception e) { return false; }
-    }
-
-    // Demande à Android de définir COs comme écran d'accueil par défaut
-    void askHome() {
-        try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                android.app.role.RoleManager rm = (android.app.role.RoleManager) getSystemService(Context.ROLE_SERVICE);
-                if (rm.isRoleAvailable(android.app.role.RoleManager.ROLE_HOME)) {
-                    startActivityForResult(rm.createRequestRoleIntent(android.app.role.RoleManager.ROLE_HOME), HOME_REQ);
-                    return;
-                }
-            }
-            startActivity(new Intent(Settings.ACTION_HOME_SETTINGS));
-        } catch (Exception e) {
-            Toast.makeText(this, "Paramètres > Apps > Apps par défaut > Application d'accueil", Toast.LENGTH_LONG).show();
-        }
+        sp = getSharedPreferences("cos", MODE_PRIVATE);
+        applyTheme(sp.getInt("theme", 0));
+        getWindow().setStatusBarColor(DARK);
+        getWindow().setNavigationBarColor(DARK);
+        logo = loadLogo();
+        stage = new FrameLayout(this);
+        bg = new NeonBg(this);
+        stage.addView(bg, new FrameLayout.LayoutParams(-1, -1));
+        content = new FrameLayout(this);
+        stage.addView(content, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(stage);
+        askPending = (b == null && !isHome());
+        if (b == null && !introDone && sp.getBoolean("intro", true)) intro();
+        else enter();
     }
 
     @Override protected void onNewIntent(Intent i) { // appui sur Accueil
         super.onNewIntent(i);
-        menu();
+        if (!inIntro) enter();
     }
 
-    @Override public void onBackPressed() { menu(); }
-
-    void screen() {
-        root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(BLUE);
-        int p = (int) (24 * getResources().getDisplayMetrics().density);
-        root.setPadding(p, p, p, p);
-        ScrollView sv = new ScrollView(this);
-        sv.setFillViewport(true);
-        sv.addView(root);
-        setContentView(sv);
+    @Override public void onBackPressed() {
+        if (screen.equals("settings")) home();
     }
 
-    TextView text(String s, int size) {
+    void enter() {
+        inIntro = false;
+        if (sp.getBoolean("menu", true)) menu(); else home();
+        if (askPending) { askPending = false; ui.postDelayed(this::askHome, 400); }
+    }
+
+    // ---------------------------------------------------------------- outils UI
+    int dp(float v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
+    static int withAlpha(int c, int a) { return (Math.max(0, Math.min(255, a)) << 24) | (c & 0x00FFFFFF); }
+    static float cl(float x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
+    void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
+
+    void applyTheme(int i) {
+        if (i < 0 || i >= THEMES.length) i = 0;
+        C1 = THEMES[i][0]; C2 = THEMES[i][1];
+    }
+
+    Bitmap loadLogo() {
+        try {
+            int id = getResources().getIdentifier("cos_logo", "drawable", getPackageName());
+            if (id == 0) return null;
+            return BitmapFactory.decodeResource(getResources(), id);
+        } catch (Throwable e) { return null; }
+    }
+
+    void show(View v, String name) {
+        screen = name;
+        content.removeAllViews();
+        content.addView(v, new FrameLayout.LayoutParams(-1, -1));
+        v.setAlpha(0f);
+        v.animate().alpha(1f).setDuration(240).start();
+    }
+
+    LinearLayout col(int gravity) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setGravity(gravity);
+        c.setPadding(dp(24), dp(20), dp(24), dp(20));
+        return c;
+    }
+
+    ScrollView scroll(View c) {
+        ScrollView s = new ScrollView(this);
+        s.setFillViewport(true);
+        s.setVerticalScrollBarEnabled(false);
+        s.addView(c, new ViewGroup.LayoutParams(-1, -2));
+        return s;
+    }
+
+    LinearLayout.LayoutParams lp(int w, int h, int mb) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, h);
+        p.bottomMargin = mb;
+        p.gravity = Gravity.CENTER_HORIZONTAL;
+        return p;
+    }
+
+    TextView txt(String s, float size, int color, boolean glow) {
         TextView t = new TextView(this);
-        t.setText(s); t.setTextColor(FG); t.setTextSize(size);
-        t.setTypeface(Typeface.MONOSPACE);
-        t.setPadding(0, 0, 0, 16);
-        root.addView(t);
+        t.setText(s); t.setTextSize(size); t.setTextColor(color);
+        t.setGravity(Gravity.CENTER);
+        if (glow) {
+            t.setShadowLayer(dp(14), 0, 0, C1);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            t.setLetterSpacing(0.08f);
+        }
         return t;
     }
 
-    Button button(String s, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(s); b.setTextColor(FG); b.setTextSize(22);
-        b.setAllCaps(false); b.setTypeface(Typeface.MONOSPACE);
-        b.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        b.setBackgroundColor(0x33FFFFFF);
-        b.setOnClickListener(l);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, (int) (64 * getResources().getDisplayMetrics().density));
-        lp.setMargins(0, 0, 0, 16);
-        root.addView(b, lp);
-        return b;
+    Drawable neonBox(float radiusDp, boolean strong) {
+        GradientDrawable glow = new GradientDrawable();
+        glow.setCornerRadius(dp(radiusDp + 3));
+        glow.setStroke(dp(5), withAlpha(C1, strong ? 0x45 : 0x25));
+        GradientDrawable box = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+            new int[]{withAlpha(C1, 0x30), withAlpha(C2, 0x30)});
+        box.setCornerRadius(dp(radiusDp));
+        box.setStroke(dp(2), C1);
+        LayerDrawable ld = new LayerDrawable(new Drawable[]{glow, box});
+        ld.setLayerInset(1, dp(3), dp(3), dp(3), dp(3));
+        return ld;
     }
 
-    void menu() {
-        screen();
-        text("COs BIOS v0.1\nChoisis un système :", 24);
-        button("Cocoon", v -> launch("cocoon", "Cocoon"));
-        button("COs", v -> cos());
-        if (!isHome()) button("Définir COs comme launcher par défaut", v -> askHome());
-    }
-
-    void cos() {
-        screen();
-        text("COs", 28);
-        button("Ouvrir un fichier (.apk / .exe)", v -> {
-            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            i.setType("*/*"); i.addCategory(Intent.CATEGORY_OPENABLE);
-            startActivityForResult(i, PICK);
+    TextView nbtn(String s, final View.OnClickListener l) {
+        TextView t = new TextView(this);
+        t.setText(s); t.setTextColor(Color.WHITE); t.setTextSize(19);
+        t.setGravity(Gravity.CENTER);
+        t.setShadowLayer(dp(8), 0, 0, C1);
+        t.setLetterSpacing(0.04f);
+        t.setPadding(dp(18), dp(12), dp(18), dp(12));
+        t.setBackground(neonBox(18, true));
+        t.setClickable(true);
+        t.setOnClickListener(v -> { tick(); l.onClick(v); });
+        t.setOnTouchListener((v, e) -> {
+            int a = e.getAction();
+            if (a == MotionEvent.ACTION_DOWN) v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80).start();
+            else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL)
+                v.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
+            return false;
         });
-        button("Mes apps", v -> apps());
-        button("Retour au menu", v -> menu());
+        return t;
+    }
+
+    // ---------------------------------------------------------------- ecrans
+    void menu() {
+        LinearLayout c = col(Gravity.CENTER);
+        if (logo != null) {
+            ImageView iv = new ImageView(this);
+            iv.setImageBitmap(logo);
+            c.addView(iv, lp(dp(150), dp(150), 0));
+        } else {
+            c.addView(txt("COs", 54, Color.WHITE, true));
+        }
+        TextView sub = txt("Choisis un système", 16, 0xCCFFFFFF, false);
+        sub.setPadding(0, dp(12), 0, dp(20));
+        c.addView(sub);
+        c.addView(nbtn("Cocoon", v -> launch("cocoon", "Cocoon")), lp(dp(300), dp(58), dp(14)));
+        c.addView(nbtn("COs", v -> home()), lp(dp(300), dp(58), dp(14)));
+        c.addView(nbtn("Réglages", v -> settings()), lp(dp(300), dp(50), dp(14)));
+        if (!isHome()) c.addView(nbtn("Définir COs comme launcher", v -> askHome()), lp(dp(300), dp(50), dp(14)));
+        show(scroll(c), "menu");
+    }
+
+    void home() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(20), dp(8), dp(20), dp(10));
+
+        TextClock clk = new TextClock(this);
+        clk.setFormat24Hour("HH:mm"); clk.setFormat12Hour("HH:mm");
+        clk.setTextSize(52); clk.setTextColor(Color.WHITE);
+        clk.setShadowLayer(dp(16), 0, 0, C1);
+        clk.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
+        clk.setGravity(Gravity.CENTER_HORIZONTAL);
+        c.addView(clk, new LinearLayout.LayoutParams(-1, -2));
+
+        TextClock dt = new TextClock(this);
+        dt.setFormat24Hour("EEEE d MMMM"); dt.setFormat12Hour("EEEE d MMMM");
+        dt.setTextSize(15); dt.setTextColor(0xCCFFFFFF);
+        dt.setShadowLayer(dp(6), 0, 0, C2);
+        dt.setGravity(Gravity.CENTER_HORIZONTAL);
+        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-1, -2);
+        dl.bottomMargin = dp(10);
+        c.addView(dt, dl);
+
+        EditText q = new EditText(this);
+        q.setHint("Rechercher une app…");
+        q.setHintTextColor(0x88FFFFFF); q.setTextColor(Color.WHITE);
+        q.setSingleLine(true);
+        q.setBackground(neonBox(16, false));
+        q.setPadding(dp(16), dp(8), dp(16), dp(8));
+        LinearLayout.LayoutParams ql = new LinearLayout.LayoutParams(-1, dp(50));
+        ql.bottomMargin = dp(10);
+        c.addView(q, ql);
+
+        final List<AppItem> all = loadApps();
+        final List<AppItem> shown = new ArrayList<>(all);
+        final PackageManager pm = getPackageManager();
+        GridView g = new GridView(this);
+        g.setNumColumns(GridView.AUTO_FIT);
+        g.setColumnWidth(dp(100));
+        g.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
+        g.setVerticalSpacing(dp(8));
+        g.setSelector(new ColorDrawable(0));
+        final BaseAdapter ad = new BaseAdapter() {
+            public int getCount() { return shown.size(); }
+            public Object getItem(int i) { return shown.get(i); }
+            public long getItemId(int i) { return i; }
+            public View getView(int i, View v, ViewGroup parent) {
+                AppItem a = shown.get(i);
+                if (v == null) {
+                    LinearLayout cell = new LinearLayout(MainActivity.this);
+                    cell.setOrientation(LinearLayout.VERTICAL);
+                    cell.setGravity(Gravity.CENTER_HORIZONTAL);
+                    cell.setPadding(dp(4), dp(6), dp(4), dp(6));
+                    ImageView iv0 = new ImageView(MainActivity.this);
+                    iv0.setId(1001);
+                    iv0.setPadding(dp(9), dp(9), dp(9), dp(9));
+                    iv0.setBackground(neonBox(16, false));
+                    cell.addView(iv0, new LinearLayout.LayoutParams(dp(62), dp(62)));
+                    TextView tv0 = new TextView(MainActivity.this);
+                    tv0.setId(1002);
+                    tv0.setTextSize(12); tv0.setTextColor(Color.WHITE);
+                    tv0.setGravity(Gravity.CENTER);
+                    tv0.setMaxLines(1);
+                    tv0.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    tv0.setShadowLayer(dp(4), 0, 0, C1);
+                    tv0.setPadding(0, dp(4), 0, 0);
+                    cell.addView(tv0, new LinearLayout.LayoutParams(-1, -2));
+                    v = cell;
+                }
+                ImageView iv = (ImageView) v.findViewById(1001);
+                TextView tv = (TextView) v.findViewById(1002);
+                if (a.icon == null) a.icon = a.ri.loadIcon(pm);
+                iv.setImageDrawable(a.icon);
+                tv.setText(a.label);
+                return v;
+            }
+        };
+        g.setAdapter(ad);
+        g.setOnItemClickListener((p, v, i, id) -> { tick(); openApp(shown.get(i)); });
+        g.setOnItemLongClickListener((p, v, i, id) -> { appMenu(shown.get(i)); return true; });
+        c.addView(g, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        q.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int x, int y, int z) {}
+            public void onTextChanged(CharSequence s, int x, int y, int z) {}
+            public void afterTextChanged(Editable e) {
+                String k = e.toString().trim().toLowerCase();
+                shown.clear();
+                for (AppItem a : all) if (k.isEmpty() || a.label.toLowerCase().contains(k)) shown.add(a);
+                ad.notifyDataSetChanged();
+            }
+        });
+
+        LinearLayout dock = new LinearLayout(this);
+        dock.setOrientation(LinearLayout.HORIZONTAL);
+        dockBtn(dock, "Fichiers", v -> pickFile());
+        dockBtn(dock, "Réglages", v -> settings());
+        dockBtn(dock, "Menu", v -> menu());
+        c.addView(dock, new LinearLayout.LayoutParams(-1, -2));
+        show(c, "home");
+    }
+
+    void dockBtn(LinearLayout dock, String s, View.OnClickListener l) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(50), 1f);
+        p.setMargins(dp(4), dp(8), dp(4), 0);
+        dock.addView(nbtn(s, l), p);
+    }
+
+    void settings() {
+        LinearLayout c = col(Gravity.CENTER_HORIZONTAL);
+        c.addView(txt("Réglages", 34, Color.WHITE, true), lp(-2, -2, dp(18)));
+        c.addView(txt("Thème néon", 15, 0xCCFFFFFF, false), lp(-2, -2, dp(10)));
+        LinearLayout row = new LinearLayout(this);
+        for (int i = 0; i < THEMES.length; i++) {
+            final int k = i;
+            View sw = new View(this);
+            GradientDrawable gd = new GradientDrawable(GradientDrawable.Orientation.TL_BR, THEMES[i]);
+            gd.setShape(GradientDrawable.OVAL);
+            gd.setStroke(dp(3), sp.getInt("theme", 0) == i ? Color.WHITE : 0x55FFFFFF);
+            sw.setBackground(gd);
+            sw.setOnClickListener(v -> {
+                tick();
+                sp.edit().putInt("theme", k).apply();
+                applyTheme(k); bg.invalidate(); settings();
+            });
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(54), dp(54));
+            p.setMargins(dp(8), 0, dp(8), 0);
+            row.addView(sw, p);
+        }
+        c.addView(row, lp(-2, -2, dp(22)));
+        c.addView(toggle("Sons", "sfx"), lp(dp(320), dp(54), dp(12)));
+        c.addView(toggle("Intro au démarrage", "intro"), lp(dp(320), dp(54), dp(12)));
+        c.addView(toggle("Menu de choix au démarrage", "menu"), lp(dp(320), dp(54), dp(12)));
+        c.addView(nbtn("Rejouer l'intro", v -> intro()), lp(dp(320), dp(54), dp(12)));
+        c.addView(nbtn("Réglages Android", v -> {
+            try { startActivity(new Intent(Settings.ACTION_SETTINGS)); } catch (Exception e) { toast("Impossible d'ouvrir les réglages"); }
+        }), lp(dp(320), dp(54), dp(12)));
+        if (!isHome()) c.addView(nbtn("Définir COs comme launcher", v -> askHome()), lp(dp(320), dp(54), dp(12)));
+        c.addView(nbtn("Retour", v -> home()), lp(dp(320), dp(54), dp(12)));
+        show(scroll(c), "settings");
+    }
+
+    TextView toggle(String label, final String key) {
+        final boolean on = sp.getBoolean(key, true);
+        return nbtn(label + " : " + (on ? "ON" : "OFF"), v -> {
+            sp.edit().putBoolean(key, !on).apply();
+            settings();
+        });
+    }
+
+    // ---------------------------------------------------------------- apps
+    List<AppItem> loadApps() {
+        PackageManager pm = getPackageManager();
+        List<ResolveInfo> l = pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0);
+        List<AppItem> out = new ArrayList<>();
+        for (ResolveInfo r : l) {
+            if (r.activityInfo.packageName.equals(getPackageName())) continue;
+            AppItem a = new AppItem();
+            a.ri = r; a.label = r.loadLabel(pm).toString();
+            a.pkg = r.activityInfo.packageName; a.cls = r.activityInfo.name;
+            out.add(a);
+        }
+        Collections.sort(out, (x, y) -> x.label.compareToIgnoreCase(y.label));
+        return out;
+    }
+
+    void openApp(AppItem a) {
+        Intent i = new Intent(Intent.ACTION_MAIN);
+        i.setClassName(a.pkg, a.cls);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try { startActivity(i); } catch (Exception e) { toast("Impossible d'ouvrir " + a.label); }
+    }
+
+    void appMenu(final AppItem a) {
+        new AlertDialog.Builder(this).setTitle(a.label)
+            .setItems(new String[]{"Infos de l'app", "Désinstaller"}, (dlg, w) -> {
+                Uri u = Uri.parse("package:" + a.pkg);
+                Intent i = (w == 0) ? new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, u) : new Intent(Intent.ACTION_DELETE, u);
+                try { startActivity(i); } catch (Exception e) { toast("Action impossible"); }
+            }).show();
     }
 
     // Retrouve une app par nom (ou paquet), parmi les apps normales et les launchers
@@ -133,33 +396,46 @@ public class MainActivity extends Activity {
 
     boolean launch(String key, String nom) {
         ResolveInfo r = find(key);
-        if (r == null) {
-            Toast.makeText(this, nom + " n’est pas installé.", Toast.LENGTH_LONG).show();
-            return false;
-        }
+        if (r == null) { toast(nom + " n'est pas installé."); return false; }
         Intent i = new Intent(Intent.ACTION_MAIN);
         i.setClassName(r.activityInfo.packageName, r.activityInfo.name);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try { startActivity(i); return true; }
-        catch (Exception e) { Toast.makeText(this, "Impossible d’ouvrir " + nom, Toast.LENGTH_LONG).show(); return false; }
+        catch (Exception e) { toast("Impossible d'ouvrir " + nom); return false; }
     }
 
-    void apps() {
-        screen();
-        text("Mes apps", 28);
-        PackageManager pm = getPackageManager();
-        List<ResolveInfo> l = pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0);
-        Collections.sort(l, (a, c) -> a.loadLabel(pm).toString().compareToIgnoreCase(c.loadLabel(pm).toString()));
-        for (ResolveInfo r : l) {
-            if (r.activityInfo.packageName.equals(getPackageName())) continue;
-            button(r.loadLabel(pm).toString(), v -> {
-                Intent i = new Intent(Intent.ACTION_MAIN);
-                i.setClassName(r.activityInfo.packageName, r.activityInfo.name);
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(i);
-            });
+    // ---------------------------------------------------------------- launcher par defaut
+    boolean isHome() {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                android.app.role.RoleManager rm = (android.app.role.RoleManager) getSystemService(Context.ROLE_SERVICE);
+                return rm.isRoleHeld(android.app.role.RoleManager.ROLE_HOME);
+            }
+            ResolveInfo r = getPackageManager().resolveActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0);
+            return r != null && getPackageName().equals(r.activityInfo.packageName);
+        } catch (Exception e) { return false; }
+    }
+
+    void askHome() {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                android.app.role.RoleManager rm = (android.app.role.RoleManager) getSystemService(Context.ROLE_SERVICE);
+                if (rm.isRoleAvailable(android.app.role.RoleManager.ROLE_HOME)) {
+                    startActivityForResult(rm.createRequestRoleIntent(android.app.role.RoleManager.ROLE_HOME), HOME_REQ);
+                    return;
+                }
+            }
+            startActivity(new Intent(Settings.ACTION_HOME_SETTINGS));
+        } catch (Exception e) {
+            toast("Paramètres > Apps > Apps par défaut > Application d'accueil");
         }
-        button("Retour", v -> cos());
+    }
+
+    // ---------------------------------------------------------------- fichiers .apk / .exe
+    void pickFile() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.setType("*/*"); i.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(i, PICK);
     }
 
     @Override protected void onActivityResult(int req, int res, Intent data) {
@@ -175,13 +451,223 @@ public class MainActivity extends Activity {
             Intent i = new Intent(Intent.ACTION_VIEW);
             i.setDataAndType(u, "application/vnd.android.package-archive");
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            try { startActivity(i); }
-            catch (Exception e) { Toast.makeText(this, "Autorise COs à installer des apps (Paramètres).", Toast.LENGTH_LONG).show(); }
+            try { startActivity(i); } catch (Exception e) { toast("Autorise COs à installer des apps (Paramètres)."); }
         } else if (n.endsWith(".exe")) {
-            Toast.makeText(this, "Les .exe passent par Winlator : ouvre-le puis choisis ce fichier.", Toast.LENGTH_LONG).show();
+            toast("Les .exe passent par Winlator : ouvre-le puis choisis ce fichier.");
             launch("winlator", "Winlator");
         } else {
-            Toast.makeText(this, "Format non pris en charge : " + name, Toast.LENGTH_LONG).show();
+            toast("Format non pris en charge : " + name);
+        }
+    }
+
+    // ---------------------------------------------------------------- sons (synthetises, aucun fichier)
+    short[] introPcm() {
+        int rate = 22050, n = rate * 4;
+        short[] d = new short[n];
+        double ph = 0;
+        for (int i = 0; i < n; i++) {
+            double t = i / (double) rate, s = 0;
+            if (t > 0.3 && t < 1.1) { // montee d'energie
+                double u = (t - 0.3) / 0.8;
+                ph += 2 * Math.PI * (180 + 900 * u * u) / rate;
+                s += 0.30 * Math.sin(ph) * Math.min(1, u * 3) * (1 - 0.3 * u);
+            }
+            if (t >= 1.1) { // impact grave
+                double u = t - 1.1;
+                s += 0.75 * Math.sin(2 * Math.PI * (60 - 20 * Math.min(u, 1)) * u) * Math.exp(-4 * u);
+            }
+            double[][] chimes = {{1.12, 1320}, {1.30, 1760}, {1.50, 2640}};
+            for (double[] ch : chimes) {
+                double u = t - ch[0];
+                if (u > 0) s += 0.16 * Math.sin(2 * Math.PI * ch[1] * u) * Math.exp(-3.2 * u);
+            }
+            if (t > 3.5) s *= Math.max(0, (4.0 - t) / 0.5);
+            s = Math.max(-1, Math.min(1, s));
+            d[i] = (short) (s * 30000);
+        }
+        return d;
+    }
+
+    short[] blip(double f, int ms) {
+        int rate = 22050, n = rate * ms / 1000;
+        short[] d = new short[n];
+        for (int i = 0; i < n; i++) {
+            double u = i / (double) n;
+            d[i] = (short) (Math.sin(2 * Math.PI * f * i / rate) * Math.exp(-5 * u) * 7000);
+        }
+        return d;
+    }
+
+    void tick() { playPcm(blip(1500, 45), 22050); }
+
+    void playPcm(short[] pcm, int rate) {
+        if (!sp.getBoolean("sfx", true)) return;
+        try {
+            final AudioTrack at = new AudioTrack(AudioManager.STREAM_MUSIC, rate, AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, pcm.length * 2, AudioTrack.MODE_STATIC);
+            at.write(pcm, 0, pcm.length);
+            at.play();
+            ui.postDelayed(() -> { try { at.release(); } catch (Exception ignored) {} }, pcm.length * 1000L / rate + 500);
+        } catch (Exception ignored) {}
+    }
+
+    // ---------------------------------------------------------------- intro
+    void intro() {
+        inIntro = true;
+        IntroView iv = new IntroView(this, logo);
+        screen = "intro";
+        content.removeAllViews();
+        content.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+        iv.onDone = () -> { introDone = true; enter(); };
+        playPcm(introPcm(), 22050);
+        iv.start();
+    }
+
+    class IntroView extends View {
+        final Bitmap lg;
+        long t0 = 0;
+        boolean done = false;
+        Runnable onDone;
+        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        final Paint gp = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Paint fp = new Paint();
+        final Paint tp = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Paint tg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final RectF dst = new RectF();
+        final Rect src = new Rect();
+
+        IntroView(Context c, Bitmap b) {
+            super(c);
+            lg = b;
+            fp.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
+            tp.setColor(Color.WHITE); tp.setTextAlign(Paint.Align.CENTER);
+            tp.setTypeface(Typeface.DEFAULT_BOLD);
+            tg.setColor(Color.WHITE); tg.setTextAlign(Paint.Align.CENTER);
+            tg.setLetterSpacing(0.5f);
+        }
+
+        void start() { t0 = System.nanoTime(); invalidate(); }
+
+        @Override public boolean onTouchEvent(MotionEvent e) {
+            if (e.getAction() == MotionEvent.ACTION_DOWN) finish();
+            return true;
+        }
+
+        void finish() {
+            if (done) return;
+            done = true;
+            if (onDone != null) onDone.run();
+        }
+
+        @Override protected void onDraw(Canvas cv) {
+            if (done) return;
+            float t = (System.nanoTime() - t0) / 1e9f;
+            float w = getWidth(), h = getHeight();
+            cv.drawColor(0xFF000000);
+
+            float a = cl((t - 0.3f) / 0.8f);
+            float k = cl((t - 0.3f) / 1.0f);
+            float ob = (float) (1 + 2.70158 * Math.pow(k - 1, 3) + 1.70158 * Math.pow(k - 1, 2));
+            float size = Math.min(w, h) * 0.40f * (0.55f + 0.45f * ob);
+            float cx = w / 2, cy = h * 0.40f;
+            float pulse = 0.8f + 0.2f * (float) Math.sin(t * 5);
+
+            gp.setShader(new RadialGradient(cx, cy, size * 1.25f,
+                new int[]{withAlpha(C1, (int) (110 * a * pulse)), withAlpha(C2, (int) (45 * a)), 0},
+                new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
+            cv.drawCircle(cx, cy, size * 1.25f, gp);
+
+            float half = size / 2;
+            if (lg != null) {
+                // reflet "eau" : tranches decalees, estompees vers le bas
+                float top = cy + half + dp(6);
+                int slices = 40;
+                float sh = size / slices;
+                int layer = cv.saveLayer(0, top, w, h, null);
+                p.setAlpha((int) (150 * a));
+                for (int i = 0; i < slices; i++) {
+                    float f = i / (float) slices;
+                    float off = (float) Math.sin(f * 16 + t * 5) * dp(4) * (0.2f + f);
+                    src.set(0, (int) (lg.getHeight() * (1 - (i + 1) / (float) slices)),
+                        lg.getWidth(), (int) (lg.getHeight() * (1 - i / (float) slices)));
+                    dst.set(cx - half + off, top + i * sh, cx + half + off, top + (i + 1) * sh + 1);
+                    cv.drawBitmap(lg, src, dst, p);
+                }
+                fp.setShader(new LinearGradient(0, top, 0, top + size * 0.8f, 0xFFFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+                cv.drawRect(0, top, w, h, fp);
+                cv.restoreToCount(layer);
+
+                p.setAlpha((int) (255 * a));
+                dst.set(cx - half, cy - half, cx + half, cy + half);
+                cv.drawBitmap(lg, null, dst, p);
+            } else {
+                tp.setTextSize(size * 0.5f);
+                tp.setShadowLayer(dp(24), 0, 0, C1);
+                tp.setAlpha((int) (255 * a));
+                cv.drawText("COs", cx, cy + size * 0.18f, tp);
+            }
+
+            float ta = cl((t - 1.6f) / 0.6f);
+            tg.setTextSize(dp(15));
+            tg.setShadowLayer(dp(10), 0, 0, C2);
+            tg.setAlpha((int) (220 * ta));
+            cv.drawText("CUSTOM OS", cx, h * 0.90f, tg);
+
+            if (t > 1.1f) { // flash sur l'impact
+                float fl = cl(1 - (t - 1.1f) / 0.25f) * 0.28f;
+                if (fl > 0) cv.drawColor(withAlpha(0xFFFFFF, (int) (255 * fl)));
+            }
+            float fo = cl((t - 3.7f) / 0.5f);
+            if (fo > 0) cv.drawColor(withAlpha(0x000000, (int) (255 * fo)));
+            if (t >= 4.2f) { finish(); return; }
+            postInvalidateOnAnimation();
+        }
+    }
+
+    // ---------------------------------------------------------------- fond neon anime
+    class NeonBg extends View {
+        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final long t0 = System.nanoTime();
+        final float[] sx = new float[40], sy = new float[40], ss = new float[40];
+
+        NeonBg(Context c) {
+            super(c);
+            Random r = new Random(7);
+            for (int i = 0; i < 40; i++) { sx[i] = r.nextFloat(); sy[i] = r.nextFloat() * 0.55f; ss[i] = 0.5f + r.nextFloat(); }
+        }
+
+        @Override protected void onDraw(Canvas cv) {
+            float w = getWidth(), h = getHeight(), t = (System.nanoTime() - t0) / 1e9f;
+            p.setStyle(Paint.Style.FILL);
+            p.setShader(new LinearGradient(0, 0, 0, h, new int[]{DARK, 0xFF120A30, 0xFF2A0F4A},
+                new float[]{0f, 0.6f, 1f}, Shader.TileMode.CLAMP));
+            cv.drawRect(0, 0, w, h, p);
+            p.setShader(null);
+            for (int i = 0; i < 40; i++) {
+                float tw = 0.5f + 0.5f * (float) Math.sin(t * ss[i] * 2 + i);
+                p.setColor(withAlpha(0xFFFFFF, (int) (40 + 120 * tw)));
+                cv.drawCircle(sx[i] * w, sy[i] * h, dp(1.2f) * ss[i], p);
+            }
+            float hy = h * 0.58f;
+            p.setShader(new RadialGradient(w / 2, hy, w * 0.45f, new int[]{withAlpha(C2, 90), 0}, null, Shader.TileMode.CLAMP));
+            cv.drawCircle(w / 2, hy, w * 0.45f, p);
+            p.setShader(null);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(dp(1.2f));
+            float phase = (t * 0.35f) % 1f;
+            int n = 14;
+            for (int i = 0; i < n; i++) {
+                float f = (i + phase) / n;
+                float y = hy + (h - hy) * f * f;
+                p.setColor(withAlpha(C1, (int) (30 + 150 * f)));
+                cv.drawLine(0, y, w, y, p);
+            }
+            p.setColor(withAlpha(C1, 110));
+            for (int k = -12; k <= 12; k++) cv.drawLine(w / 2 + k * w * 0.02f, hy, w / 2 + k * w * 0.11f, h, p);
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(withAlpha(C2, 200));
+            cv.drawRect(0, hy - dp(1), w, hy + dp(1), p);
+            postInvalidateOnAnimation();
         }
     }
 }
