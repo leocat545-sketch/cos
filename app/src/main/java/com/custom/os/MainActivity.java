@@ -28,6 +28,8 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.*;
@@ -35,7 +37,7 @@ import java.util.*;
 
 /** COs 1.0 - launcher neon : intro, menu Cocoon/COs, accueil avec apps, reglages */
 public class MainActivity extends Activity {
-    static final int PICK = 1, HOME_REQ = 2;
+    static final int PICK = 1, HOME_REQ = 2, FILE_REQ = 3;
     static final int DARK = 0xFF05030F;
     static final int[][] THEMES = {
         {0xFF00E5FF, 0xFFD500F9}, {0xFF39FF14, 0xFF00E5FF}, {0xFFFF9100, 0xFFFF1744},
@@ -50,6 +52,7 @@ public class MainActivity extends Activity {
     NeonBg bg;
     Bitmap logo;
     boolean inIntro = false, askPending = false;
+    ValueCallback<Uri[]> fileCb;
     String screen = "";
     final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -441,6 +444,23 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void exit() { runOnUiThread(() -> home()); }
         }, "Android");
+        w.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onShowFileChooser(WebView wv, ValueCallback<Uri[]> cb, FileChooserParams params) {
+                if (fileCb != null) fileCb.onReceiveValue(null);
+                fileCb = cb;
+                Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                i.setType("*/*");
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                try {
+                    startActivityForResult(Intent.createChooser(i, "Choisir un fichier"), FILE_REQ);
+                } catch (Exception e) {
+                    fileCb = null;
+                    cb.onReceiveValue(null);
+                    return false;
+                }
+                return true;
+            }
+        });
         String q = "?c1=" + String.format("%06x", C1 & 0xFFFFFF) + "&c2=" + String.format("%06x", C2 & 0xFFFFFF);
         w.loadUrl("file:///android_asset/cos_os.html" + q);
         w.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
@@ -675,6 +695,11 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == FILE_REQ) {
+            Uri[] out = (res == RESULT_OK && data != null && data.getData() != null) ? new Uri[]{data.getData()} : null;
+            if (fileCb != null) { fileCb.onReceiveValue(out); fileCb = null; }
+            return;
+        }
         if (req != PICK || res != RESULT_OK || data == null) return;
         Uri u = data.getData();
         String name = "";

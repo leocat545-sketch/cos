@@ -33,6 +33,17 @@ canvas{display:block;margin:0 auto;border:1px solid var(--c1);border-radius:8px;
 .chip{border:1px solid var(--c1);background:rgba(255,255,255,.06);color:var(--fg);border-radius:10px;padding:8px 12px;font:inherit;font-size:14px;white-space:nowrap}
 #clock{font-variant-numeric:tabular-nums;min-width:52px;text-align:right}
 #quit{border:1px solid var(--c2);background:rgba(255,255,255,.06);color:var(--fg);border-radius:10px;padding:8px 12px;font:inherit}
+.gbpad{display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding:0 4px}
+.dpad{display:grid;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(3,52px);gap:2px}
+.gbb{width:52px;height:52px;border-radius:12px;border:1px solid var(--c1);background:rgba(255,255,255,.06);color:var(--fg);font:inherit;font-size:20px;touch-action:none}
+.gbb.on{background:var(--c1);color:#05030f;box-shadow:0 0 14px var(--c1)}
+.abtn{display:flex;gap:12px;transform:rotate(-14deg)}
+.abtn .gbb{width:64px;height:64px;border-radius:50%;font-weight:700}
+.ss{display:flex;gap:12px;justify-content:center;margin-top:10px}
+.ss .gbb{width:88px;height:34px;font-size:13px;border-radius:17px}
+.gbtop{display:flex;gap:6px;margin-bottom:8px}
+.gbtop .k{flex:1;font-size:14px;height:38px}
+.gbst{font-size:12px;opacity:.75;text-align:center;margin-top:6px;min-height:16px}
 </style></head>
 <body>
 <div id="wall"></div>
@@ -50,6 +61,302 @@ function ld(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function sv(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 function pad(n){return (n<10?'0':'')+n}
 var z=10,n=0,wins={};
+
+function GB(rom,fb,pal){
+  var self=this;
+  var vram=new Uint8Array(0x2000),wram=new Uint8Array(0x2000),oam=new Uint8Array(0xA0),io=new Uint8Array(0x80),hram=new Uint8Array(0x80),ie=0;
+  var ctype=rom[0x147],nb=Math.max(2,rom.length>>14);
+  var mbc=(ctype>=1&&ctype<=3)||ctype==5||ctype==6?1:(ctype>=0x0F&&ctype<=0x13)?3:(ctype>=0x19&&ctype<=0x1E)?5:0;
+  var ramKB=[0,0,8,32,128,64][rom[0x149]]||0;
+  var eram=new Uint8Array(Math.max(ramKB,8)*1024);
+  var bat=ramKB>0&&[0x03,0x06,0x09,0x0D,0x0F,0x10,0x13,0x1B,0x1E].indexOf(ctype)>=0;
+  var romBank=1,ramBank=0,ramEn=false,mode=0,b1=1,b2=0;
+  var ttl='';for(var i=0x134;i<0x143;i++){if(rom[i]>31&&rom[i]<127)ttl+=String.fromCharCode(rom[i])}
+  this.title=ttl.trim()||'ROM';this.hasBattery=bat;this.dirty=false;this.mbc=mbc;
+  // ---- registres
+  var R=new Uint8Array(8),F=0xB0,SP=0xFFFE,PC=0x100,ime=false,imeNext=false,halted=false;
+  R[7]=1;R[0]=0;R[1]=0x13;R[2]=0;R[3]=0xD8;R[4]=1;R[5]=0x4D;
+  var div=0xABCC,tcyc=0,lcyc=0,ly=0,pmode=0,frameDone=false,pad=0;
+  io[0x40]=0x91;io[0x47]=0xFC;io[0x48]=0xFF;io[0x49]=0xFF;io[0x0F]=0x01;io[0x41]=0x85;
+  // ---- memoire
+  function rb(a){
+    switch(a>>12){
+      case 0:case 1:case 2:case 3:
+        if(a<0x4000)return rom[((mbc==1&&mode?(b2<<5)%nb:0)<<14)+a];
+        return rom[((romBank%nb)<<14)+(a-0x4000)];
+      case 4:case 5:case 6:case 7:
+        return rom[((romBank%nb)<<14)+(a-0x4000)];
+      case 8:case 9:return vram[a&0x1FFF];
+      case 10:case 11:
+        if(!ramEn)return 0xFF;
+        if(mbc==3&&ramBank>=8)return 0;
+        return eram[(((mbc==1)?(mode?b2:0):ramBank)*0x2000+(a&0x1FFF))%eram.length];
+      case 12:case 13:case 14:return wram[a&0x1FFF];
+      default:
+        if(a<0xFE00)return wram[a&0x1FFF];
+        if(a<0xFEA0)return oam[a-0xFE00];
+        if(a<0xFF00)return 0xFF;
+        if(a<0xFF80)return ior(a&0x7F);
+        if(a<0xFFFF)return hram[a&0x7F];
+        return ie;
+    }
+  }
+  function ior(r){
+    switch(r){
+      case 0:var s=io[0]&0x30,v=0x0F;if(!(s&0x10))v&=~(pad&0x0F);if(!(s&0x20))v&=~((pad>>4)&0x0F);return 0xC0|s|(v&0x0F);
+      case 4:return (div>>8)&255;
+      case 0x0F:return io[0x0F]|0xE0;
+      case 0x41:return (io[0x41]&0x78)|0x80|((io[0x40]&0x80)?((ly==io[0x45]?4:0)|pmode):0);
+      case 0x44:return ly;
+      default:return io[r];
+    }
+  }
+  function wb(a,v){
+    switch(a>>12){
+      case 0:case 1:ramEn=(v&15)==10;return;
+      case 2:case 3:
+        if(mbc==1){b1=v&31;if(!b1)b1=1;romBank=(b2<<5)|b1}
+        else if(mbc==3){romBank=(v&127)||1}
+        else if(mbc==5){if(a<0x3000)romBank=(romBank&0x100)|v;else romBank=(romBank&255)|((v&1)<<8)}
+        return;
+      case 4:case 5:
+        if(mbc==1){b2=v&3;romBank=(b2<<5)|b1}else ramBank=v&(mbc==5?15:15);
+        return;
+      case 6:case 7:if(mbc==1)mode=v&1;return;
+      case 8:case 9:vram[a&0x1FFF]=v;return;
+      case 10:case 11:
+        if(!ramEn)return;
+        if(mbc==3&&ramBank>=8)return;
+        eram[(((mbc==1)?(mode?b2:0):ramBank)*0x2000+(a&0x1FFF))%eram.length]=v;self.dirty=true;return;
+      case 12:case 13:case 14:wram[a&0x1FFF]=v;return;
+      default:
+        if(a<0xFE00){wram[a&0x1FFF]=v;return}
+        if(a<0xFEA0){oam[a-0xFE00]=v;return}
+        if(a<0xFF00)return;
+        if(a<0xFF80){iow(a&0x7F,v);return}
+        if(a<0xFFFF){hram[a&0x7F]=v;return}
+        ie=v;
+    }
+  }
+  function iow(r,v){
+    switch(r){
+      case 0:io[0]=v&0x30;return;
+      case 4:div=0;return;
+      case 0x0F:io[0x0F]=v&0x1F;return;
+      case 0x40:
+        if((v&0x80)==0&&(io[0x40]&0x80)){ly=0;lcyc=0;pmode=0}
+        if((v&0x80)&&!(io[0x40]&0x80)){lcyc=0;ly=0;pmode=2}
+        io[0x40]=v;return;
+      case 0x41:io[0x41]=(io[0x41]&7)|(v&0x78);return;
+      case 0x44:ly=0;return;
+      case 0x46:{var s=v<<8;for(var i=0;i<160;i++)oam[i]=rb(s+i);io[0x46]=v;return}
+      default:io[r]=v;
+    }
+  }
+  // ---- CPU
+  function f8(){var v=rb(PC);PC=(PC+1)&0xFFFF;return v}
+  function f16(){var l=rb(PC),h=rb((PC+1)&0xFFFF);PC=(PC+2)&0xFFFF;return h<<8|l}
+  function push(v){SP=(SP-1)&0xFFFF;wb(SP,v>>8);SP=(SP-1)&0xFFFF;wb(SP,v&255)}
+  function pop(){var l=rb(SP);SP=(SP+1)&0xFFFF;var h=rb(SP);SP=(SP+1)&0xFFFF;return h<<8|l}
+  function HL(){return R[4]<<8|R[5]}
+  function get(i){return i==6?rb(HL()):R[i]}
+  function set(i,v){if(i==6)wb(HL(),v);else R[i]=v}
+  function rr(i){switch(i){case 0:return R[0]<<8|R[1];case 1:return R[2]<<8|R[3];case 2:return R[4]<<8|R[5];default:return SP}}
+  function setrr(i,v){v&=0xFFFF;switch(i){case 0:R[0]=v>>8;R[1]=v&255;break;case 1:R[2]=v>>8;R[3]=v&255;break;case 2:R[4]=v>>8;R[5]=v&255;break;default:SP=v}}
+  function cc(i){switch(i){case 0:return !(F&0x80);case 1:return !!(F&0x80);case 2:return !(F&0x10);default:return !!(F&0x10)}}
+  function alu(k,v){
+    var a=R[7],r,cy;
+    switch(k){
+      case 0:r=a+v;F=((r&255)==0?0x80:0)|(((a&15)+(v&15))>15?0x20:0)|(r>255?0x10:0);R[7]=r;break;
+      case 1:cy=(F&0x10)?1:0;r=a+v+cy;F=((r&255)==0?0x80:0)|(((a&15)+(v&15)+cy)>15?0x20:0)|(r>255?0x10:0);R[7]=r;break;
+      case 2:r=a-v;F=0x40|((r&255)==0?0x80:0)|((a&15)<(v&15)?0x20:0)|(r<0?0x10:0);R[7]=r;break;
+      case 3:cy=(F&0x10)?1:0;r=a-v-cy;F=0x40|((r&255)==0?0x80:0)|(((a&15)-(v&15)-cy)<0?0x20:0)|(r<0?0x10:0);R[7]=r;break;
+      case 4:r=a&v;F=(r==0?0x80:0)|0x20;R[7]=r;break;
+      case 5:r=a^v;F=(r==0?0x80:0);R[7]=r;break;
+      case 6:r=a|v;F=(r==0?0x80:0);R[7]=r;break;
+      default:r=a-v;F=0x40|((r&255)==0?0x80:0)|((a&15)<(v&15)?0x20:0)|(r<0?0x10:0);
+    }
+  }
+  function cb(){
+    var op=f8(),z=op&7,y=(op>>3)&7,x=op>>6,v=get(z),r,cy;
+    if(x==0){
+      switch(y){
+        case 0:cy=v>>7;r=((v<<1)|cy)&255;break;
+        case 1:cy=v&1;r=(v>>1)|(cy<<7);break;
+        case 2:cy=v>>7;r=((v<<1)|((F&0x10)?1:0))&255;break;
+        case 3:cy=v&1;r=(v>>1)|((F&0x10)?0x80:0);break;
+        case 4:cy=v>>7;r=(v<<1)&255;break;
+        case 5:cy=v&1;r=(v>>1)|(v&0x80);break;
+        case 6:cy=0;r=((v<<4)|(v>>4))&255;break;
+        default:cy=v&1;r=v>>1;
+      }
+      F=(r==0?0x80:0)|(cy?0x10:0);set(z,r);return z==6?16:8;
+    }
+    if(x==1){F=(F&0x10)|0x20|(((v>>y)&1)?0:0x80);return z==6?12:8}
+    if(x==2)set(z,v&~(1<<y)&255);else set(z,v|(1<<y));
+    return z==6?16:8;
+  }
+  function exec(){
+    var op=f8(),a,e,v,d,i;
+    if(op>=0x40&&op<0x80){
+      if(op==0x76){halted=true;return 4}
+      d=(op>>3)&7;i=op&7;set(d,get(i));return (d==6||i==6)?8:4;
+    }
+    if(op>=0x80&&op<0xC0){alu((op>>3)&7,get(op&7));return (op&7)==6?8:4}
+    switch(op){
+      case 0x00:return 4;
+      case 0x02:wb(R[0]<<8|R[1],R[7]);return 8;
+      case 0x12:wb(R[2]<<8|R[3],R[7]);return 8;
+      case 0x22:a=HL();wb(a,R[7]);setrr(2,a+1);return 8;
+      case 0x32:a=HL();wb(a,R[7]);setrr(2,a-1);return 8;
+      case 0x0A:R[7]=rb(R[0]<<8|R[1]);return 8;
+      case 0x1A:R[7]=rb(R[2]<<8|R[3]);return 8;
+      case 0x2A:a=HL();R[7]=rb(a);setrr(2,a+1);return 8;
+      case 0x3A:a=HL();R[7]=rb(a);setrr(2,a-1);return 8;
+      case 0x07:v=R[7]>>7;R[7]=(R[7]<<1)|v;F=v?0x10:0;return 4;
+      case 0x0F:v=R[7]&1;R[7]=(R[7]>>1)|(v<<7);F=v?0x10:0;return 4;
+      case 0x17:v=(F&0x10)?1:0;F=(R[7]&0x80)?0x10:0;R[7]=(R[7]<<1)|v;return 4;
+      case 0x1F:v=(F&0x10)?0x80:0;F=(R[7]&1)?0x10:0;R[7]=(R[7]>>1)|v;return 4;
+      case 0x08:a=f16();wb(a,SP&255);wb((a+1)&0xFFFF,SP>>8);return 20;
+      case 0x10:f8();return 4;
+      case 0x18:e=(f8()<<24)>>24;PC=(PC+e)&0xFFFF;return 12;
+      case 0x27:
+        a=R[7];v=!!(F&0x10);
+        if(!(F&0x40)){if(v||a>0x99){a+=0x60;v=true}if((F&0x20)||(a&15)>9)a+=6}
+        else{if(v)a-=0x60;if(F&0x20)a-=6}
+        a&=255;R[7]=a;F=(F&0x40)|(a==0?0x80:0)|(v?0x10:0);return 4;
+      case 0x2F:R[7]^=0xFF;F|=0x60;return 4;
+      case 0x37:F=(F&0x80)|0x10;return 4;
+      case 0x3F:F=(F&0x80)|((F&0x10)?0:0x10);return 4;
+      case 0xC3:PC=f16();return 16;
+      case 0xC9:PC=pop();return 16;
+      case 0xD9:PC=pop();ime=true;return 16;
+      case 0xCD:a=f16();push(PC);PC=a;return 24;
+      case 0xCB:return cb();
+      case 0xE0:wb(0xFF00+f8(),R[7]);return 12;
+      case 0xF0:R[7]=rb(0xFF00+f8());return 12;
+      case 0xE2:wb(0xFF00+R[1],R[7]);return 8;
+      case 0xF2:R[7]=rb(0xFF00+R[1]);return 8;
+      case 0xE8:e=(f8()<<24)>>24;F=(((SP&15)+(e&15))>15?0x20:0)|(((SP&255)+(e&255))>255?0x10:0);SP=(SP+e)&0xFFFF;return 16;
+      case 0xF8:e=(f8()<<24)>>24;F=(((SP&15)+(e&15))>15?0x20:0)|(((SP&255)+(e&255))>255?0x10:0);setrr(2,SP+e);return 12;
+      case 0xE9:PC=HL();return 4;
+      case 0xF9:SP=HL();return 8;
+      case 0xEA:wb(f16(),R[7]);return 16;
+      case 0xFA:R[7]=rb(f16());return 16;
+      case 0xF3:ime=false;imeNext=false;return 4;
+      case 0xFB:imeNext=true;return 4;
+    }
+    switch(op&0xE7){
+      case 0x20:e=(f8()<<24)>>24;if(cc((op>>3)&3)){PC=(PC+e)&0xFFFF;return 12}return 8;
+      case 0xC0:if(cc((op>>3)&3)){PC=pop();return 20}return 8;
+      case 0xC2:a=f16();if(cc((op>>3)&3)){PC=a;return 16}return 12;
+      case 0xC4:a=f16();if(cc((op>>3)&3)){push(PC);PC=a;return 24}return 12;
+    }
+    switch(op&0xC7){
+      case 0x04:d=(op>>3)&7;v=(get(d)+1)&255;F=(F&0x10)|(v==0?0x80:0)|((v&15)==0?0x20:0);set(d,v);return d==6?12:4;
+      case 0x05:d=(op>>3)&7;v=(get(d)-1)&255;F=(F&0x10)|0x40|(v==0?0x80:0)|((v&15)==15?0x20:0);set(d,v);return d==6?12:4;
+      case 0x06:d=(op>>3)&7;set(d,f8());return d==6?12:8;
+      case 0xC6:alu((op>>3)&7,f8());return 8;
+      case 0xC7:push(PC);PC=op&0x38;return 16;
+    }
+    switch(op&0xCF){
+      case 0x01:setrr((op>>4)&3,f16());return 12;
+      case 0x09:a=HL();v=rr((op>>4)&3);e=a+v;F=(F&0x80)|(((a&0xFFF)+(v&0xFFF))>0xFFF?0x20:0)|(e>0xFFFF?0x10:0);setrr(2,e);return 8;
+      case 0x03:i=(op>>4)&3;setrr(i,rr(i)+1);return 8;
+      case 0x0B:i=(op>>4)&3;setrr(i,rr(i)-1);return 8;
+      case 0xC1:v=pop();i=(op>>4)&3;if(i==3){R[7]=v>>8;F=v&0xF0}else setrr(i,v);return 12;
+      case 0xC5:i=(op>>4)&3;push(i==3?(R[7]<<8|F):rr(i));return 16;
+    }
+    return 4;
+  }
+  function setMode(m){
+    pmode=m;
+    if((m==0&&(io[0x41]&8))||(m==1&&(io[0x41]&0x10))||(m==2&&(io[0x41]&0x20)))io[0x0F]|=2;
+  }
+  var bgci=new Uint8Array(160),spr=[];
+  function renderLine(){
+    var lcdc=io[0x40],o=ly*160,bgp=io[0x47],x,ci,c;
+    var scy=io[0x42],scx=io[0x43],wy=io[0x4A],wx=io[0x4B];
+    for(x=0;x<160;x++)bgci[x]=0;
+    if(lcdc&1){
+      var win=(lcdc&0x20)&&ly>=wy&&wx<=166;
+      for(x=0;x<160;x++){
+        var px,py,base;
+        if(win&&x>=wx-7){px=x-(wx-7);py=ly-wy;base=(lcdc&0x40)?0x1C00:0x1800}
+        else{px=(x+scx)&255;py=(ly+scy)&255;base=(lcdc&8)?0x1C00:0x1800}
+        var tile=vram[base+(py>>3)*32+(px>>3)];
+        var ad=((lcdc&0x10)?tile*16:0x1000+((tile<<24)>>24)*16)+(py&7)*2;
+        var bit=7-(px&7);
+        ci=(((vram[ad+1]>>bit)&1)<<1)|((vram[ad]>>bit)&1);
+        bgci[x]=ci;
+      }
+    }
+    for(x=0;x<160;x++)fb[o+x]=pal[(bgp>>(bgci[x]*2))&3];
+    if(lcdc&2){
+      var h=(lcdc&4)?16:8;spr.length=0;
+      for(var s=0;s<40&&spr.length<10;s++){
+        var sy=oam[s*4]-16;
+        if(ly>=sy&&ly<sy+h)spr.push(s);
+      }
+      spr.sort(function(p,q){var dx=oam[q*4+1]-oam[p*4+1];return dx!=0?dx:q-p});
+      for(var k=0;k<spr.length;k++){
+        var n=spr[k]*4,sy2=oam[n]-16,sx=oam[n+1]-8,tn=oam[n+2],fl=oam[n+3];
+        var row=ly-sy2;if(fl&0x40)row=h-1-row;
+        if(h==16)tn&=0xFE;
+        var ad2=(tn*16)+row*2,lo=vram[ad2],hi=vram[ad2+1],obp=(fl&0x10)?io[0x49]:io[0x48];
+        for(var px2=0;px2<8;px2++){
+          var xx=sx+px2;if(xx<0||xx>=160)continue;
+          var b2=(fl&0x20)?px2:7-px2;
+          ci=(((hi>>b2)&1)<<1)|((lo>>b2)&1);
+          if(ci==0)continue;
+          if((fl&0x80)&&bgci[xx]!=0)continue;
+          fb[o+xx]=pal[(obp>>(ci*2))&3];
+        }
+      }
+    }
+  }
+  function ppuStep(c){
+    if(!(io[0x40]&0x80))return;
+    lcyc+=c;
+    if(lcyc>=456){
+      lcyc-=456;ly++;
+      if(ly==144){setMode(1);io[0x0F]|=1;frameDone=true}
+      else if(ly>153){ly=0}
+      if(ly==io[0x45]&&(io[0x41]&0x40))io[0x0F]|=2;
+    }
+    if(ly<144){
+      if(lcyc<80){if(pmode!=2)setMode(2)}
+      else if(lcyc<252){if(pmode!=3)setMode(3)}
+      else if(pmode!=0){setMode(0);renderLine()}
+    }
+  }
+  function step(){
+    var c=4,en=imeNext;imeNext=false;
+    if(halted){if(io[0x0F]&ie&0x1F)halted=false}
+    else c=exec();
+    if(en)ime=true;
+    if(ime){
+      var p=io[0x0F]&ie&0x1F;
+      if(p){for(var b=0;b<5;b++)if(p&(1<<b)){ime=false;io[0x0F]&=~(1<<b);push(PC);PC=0x40+b*8;c+=20;break}}
+    }
+    div=(div+c)&0xFFFF;
+    if(io[0x07]&4){
+      tcyc+=c;var per=[1024,16,64,256][io[0x07]&3];
+      while(tcyc>=per){tcyc-=per;var t=io[0x05]+1;if(t>255){t=io[0x06];io[0x0F]|=4}io[0x05]=t}
+    }
+    ppuStep(c);
+    return c;
+  }
+  this.frame=function(){
+    var n=0;frameDone=false;
+    while(!frameDone&&n<140000){n+=step()}
+  };
+  this.press=function(bit,down){
+    if(down){if(!(pad&(1<<bit))){pad|=(1<<bit);io[0x0F]|=0x10}}else pad&=~(1<<bit);
+  };
+  this.rb=rb;this.eram=eram;
+  this.regs=function(){return {A:R[7],F:F,PC:PC,SP:SP}};
+}
 
 var APPS={
 notes:{t:'Notes',i:'📝',make:function(b){
@@ -112,6 +419,65 @@ snake:{t:'Snake',i:'🐍',make:function(b,o){
   [['◀',-1,0],['▲',0,-1],['▼',0,1],['▶',1,0]].forEach(function(a){
     var k=el('button','k',a[0]);k.style.width='54px';k.onclick=function(){go(a[1],a[2])};r.appendChild(k)});
   b.appendChild(r);rs();var iv=setInterval(st,130);o.stop=function(){clearInterval(iv)}}}
+,gb:{t:'Game Boy',i:'🎮',w:372,make:function(b,o){
+  var cv=el('canvas');cv.width=160;cv.height=144;cv.style.cssText='width:100%;image-rendering:pixelated;aspect-ratio:160/144';
+  var ctx=cv.getContext('2d'),img=ctx.createImageData(160,144),fb=new Uint32Array(img.data.buffer),pal=new Uint32Array(4);
+  var g=null,rom=null,pi=2,raf=0,last=0,acc=0,fr=0,key='';
+  var st=el('div','gbst','Charge une ROM (.gb) pour jouer');
+  function hex2(c){var m=/([0-9a-f]{6})/i.exec(c);var n=m?parseInt(m[1],16):16777215;return [n>>16&255,n>>8&255,n&255]}
+  function mix(a,c,t){return [0,1,2].map(function(i){return Math.round(a[i]*(1-t)+c[i]*t)})}
+  var PS=[['Classique',[[224,248,208],[136,192,112],[52,104,86],[8,24,32]]],['Gris',[[255,255,255],[170,170,170],[85,85,85],[0,0,0]]],['Néon',null]];
+  var fi=el('input');fi.type='file';fi.style.display='none';
+  var lb=el('button','k','📂 ROM'),pb=el('button','k',''),rs=el('button','k','↺ Reset');
+  function setPal(){
+    var p=PS[pi][1];
+    if(!p){var a=hex2(cs('--c1')),c=hex2(cs('--c2'));p=[mix(a,[255,255,255],.88),a,c,[8,4,24]]}
+    for(var k=0;k<4;k++)pal[k]=(0xFF000000|(p[k][2]<<16)|(p[k][1]<<8)|p[k][0])>>>0;
+    pb.textContent='🎨 '+PS[pi][0];
+    if(!g){for(var i=0;i<fb.length;i++)fb[i]=pal[0];ctx.putImageData(img,0,0)}
+  }
+  function save(){
+    if(!g||!g.hasBattery||!g.dirty)return;
+    var s='';for(var i=0;i<g.eram.length;i+=8192)s+=String.fromCharCode.apply(null,g.eram.subarray(i,i+8192));
+    sv(key,btoa(s));g.dirty=false}
+  function start(){
+    g=new GB(rom,fb,pal);key='cos_gb_'+g.title+'_'+rom.length;
+    if(g.hasBattery){var s=ld(key);if(s){try{var bin=atob(s);for(var i=0;i<bin.length&&i<g.eram.length;i++)g.eram[i]=bin.charCodeAt(i)}catch(e){}}}
+    st.textContent=g.title+(g.hasBattery?' · sauvegarde auto':'')}
+  function load(buf){
+    var r=new Uint8Array(buf);
+    if(r.length<0x150){st.textContent='ROM invalide';return}
+    save();rom=r;start()}
+  fi.onchange=function(){var f=fi.files[0];if(!f)return;var r=new FileReader();r.onload=function(){load(r.result)};r.readAsArrayBuffer(f);fi.value=''};
+  lb.onclick=function(){fi.click()};
+  pb.onclick=function(){pi=(pi+1)%PS.length;setPal()};
+  rs.onclick=function(){if(rom){save();start()}};
+  var top=el('div','gbtop');top.appendChild(lb);top.appendChild(pb);top.appendChild(rs);
+  b.appendChild(top);b.appendChild(fi);b.appendChild(cv);b.appendChild(st);
+  function mk(txt,bit){
+    var d=el('button','gbb',txt);
+    d.onpointerdown=function(e){e.preventDefault();d.classList.add('on');if(g)g.press(bit,true)};
+    function up(){d.classList.remove('on');if(g)g.press(bit,false)}
+    d.onpointerup=up;d.onpointercancel=up;d.onpointerleave=up;return d}
+  var pd=el('div','gbpad'),dp=el('div','dpad'),ab=el('div','abtn');
+  dp.appendChild(el('div'));dp.appendChild(mk('▲',2));dp.appendChild(el('div'));
+  dp.appendChild(mk('◀',1));dp.appendChild(el('div'));dp.appendChild(mk('▶',0));
+  dp.appendChild(el('div'));dp.appendChild(mk('▼',3));dp.appendChild(el('div'));
+  ab.appendChild(mk('B',5));ab.appendChild(mk('A',4));
+  pd.appendChild(dp);pd.appendChild(ab);b.appendChild(pd);
+  var ss=el('div','ss');ss.appendChild(mk('SELECT',6));ss.appendChild(mk('START',7));b.appendChild(ss);
+  var KM={ArrowRight:0,ArrowLeft:1,ArrowUp:2,ArrowDown:3,z:4,x:5,Shift:6,Enter:7};
+  function kd(e){var k=KM[e.key];if(k!=null&&g){g.press(k,true);e.preventDefault()}}
+  function ku(e){var k=KM[e.key];if(k!=null&&g){g.press(k,false);e.preventDefault()}}
+  addEventListener('keydown',kd);addEventListener('keyup',ku);
+  function loop(t){
+    raf=requestAnimationFrame(loop);
+    if(!g){last=t;return}
+    acc+=Math.min(t-last,50);last=t;
+    var n=0;while(acc>=16.74&&n<3){g.frame();acc-=16.74;n++}
+    if(n){ctx.putImageData(img,0,0);if(++fr%180==0)save()}}
+  setPal();raf=requestAnimationFrame(loop);
+  o.stop=function(){cancelAnimationFrame(raf);removeEventListener('keydown',kd);removeEventListener('keyup',ku);save()}}}
 };
 
 function tasks(){
@@ -123,6 +489,7 @@ function tasks(){
 function openApp(id){
   if(wins[id]){wins[id].el.style.zIndex=++z;return}
   var a=APPS[id],w=el('div','win'),h=el('header'),o={};
+  if(a.w)w.style.width='min('+a.w+'px,96vw)';
   h.appendChild(el('span','',a.i+' '+a.t));
   var x=el('button','',"✕");h.appendChild(x);
   var b=el('div','body');w.appendChild(h);w.appendChild(b);
