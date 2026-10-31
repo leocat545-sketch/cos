@@ -440,6 +440,7 @@ public class MainActivity extends Activity {
         WebSettings st = w.getSettings();
         st.setJavaScriptEnabled(true);
         st.setDomStorageEnabled(true);
+        st.setMediaPlaybackRequiresUserGesture(false);
         w.addJavascriptInterface(new Object() {
             @android.webkit.JavascriptInterface
             public void exit() { runOnUiThread(() -> home()); }
