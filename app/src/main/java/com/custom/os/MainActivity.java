@@ -34,8 +34,10 @@ public class MainActivity extends Activity {
     static final int PICK = 1, HOME_REQ = 2;
     static final int DARK = 0xFF05030F;
     static final int[][] THEMES = {
-        {0xFF00E5FF, 0xFFD500F9}, {0xFF39FF14, 0xFF00E5FF},
-        {0xFFFF9100, 0xFFFF1744}, {0xFF7C4DFF, 0xFF18FFFF}};
+        {0xFF00E5FF, 0xFFD500F9}, {0xFF39FF14, 0xFF00E5FF}, {0xFFFF9100, 0xFFFF1744},
+        {0xFF7C4DFF, 0xFF18FFFF}, {0xFFFF2D95, 0xFF00E5FF}, {0xFFFFEA00, 0xFF76FF03},
+        {0xFF2979FF, 0xFFE0E0FF}, {0xFFFF4081, 0xFF7C4DFF}, {0xFF1DE9B6, 0xFF00B0FF},
+        {0xFFFF1744, 0xFFD500F9}};
     static boolean introDone = false;
 
     SharedPreferences sp;
@@ -53,7 +55,7 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         sp = getSharedPreferences("cos", MODE_PRIVATE);
-        applyTheme(sp.getInt("theme", 0));
+        loadTheme();
         getWindow().setStatusBarColor(DARK);
         getWindow().setNavigationBarColor(DARK);
         logo = loadLogo();
@@ -74,7 +76,7 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (screen.equals("settings")) home();
+        if (!(screen.equals("home") || screen.equals("menu") || screen.equals("intro"))) home();
     }
 
     void enter() {
@@ -89,7 +91,13 @@ public class MainActivity extends Activity {
     static float cl(float x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
     void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
 
-    void applyTheme(int i) {
+    void loadTheme() {
+        int i = sp.getInt("theme", 0);
+        if (i == -1) {
+            C1 = sp.getInt("c1", THEMES[0][0]);
+            C2 = sp.getInt("c2", THEMES[0][1]);
+            return;
+        }
         if (i < 0 || i >= THEMES.length) i = 0;
         C1 = THEMES[i][0]; C2 = THEMES[i][1];
     }
@@ -158,6 +166,16 @@ public class MainActivity extends Activity {
         return ld;
     }
 
+    void pressFx(View t) {
+        t.setOnTouchListener((v, e) -> {
+            int a = e.getAction();
+            if (a == MotionEvent.ACTION_DOWN) v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80).start();
+            else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL)
+                v.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
+            return false;
+        });
+    }
+
     TextView nbtn(String s, final View.OnClickListener l) {
         TextView t = new TextView(this);
         t.setText(s); t.setTextColor(Color.WHITE); t.setTextSize(19);
@@ -168,13 +186,7 @@ public class MainActivity extends Activity {
         t.setBackground(neonBox(18, true));
         t.setClickable(true);
         t.setOnClickListener(v -> { tick(); l.onClick(v); });
-        t.setOnTouchListener((v, e) -> {
-            int a = e.getAction();
-            if (a == MotionEvent.ACTION_DOWN) v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80).start();
-            else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL)
-                v.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
-            return false;
-        });
+        pressFx(t);
         return t;
     }
 
@@ -198,6 +210,19 @@ public class MainActivity extends Activity {
         show(scroll(c), "menu");
     }
 
+    // ---------------------------------------------------------------- favoris (apps de l'accueil)
+    List<String> favs() {
+        String s = sp.getString("favs", "");
+        List<String> l = new ArrayList<>();
+        if (!s.isEmpty()) l.addAll(Arrays.asList(s.split("\n")));
+        return l;
+    }
+
+    void saveFavs(List<String> l) { sp.edit().putString("favs", android.text.TextUtils.join("\n", l)).apply(); }
+
+    static String key(AppItem a) { return a.pkg + "/" + a.cls; }
+
+    // ---------------------------------------------------------------- accueil
     void home() {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
@@ -220,18 +245,61 @@ public class MainActivity extends Activity {
         dl.bottomMargin = dp(10);
         c.addView(dt, dl);
 
-        EditText q = new EditText(this);
-        q.setHint("Rechercher une app…");
-        q.setHintTextColor(0x88FFFFFF); q.setTextColor(Color.WHITE);
-        q.setSingleLine(true);
-        q.setBackground(neonBox(16, false));
-        q.setPadding(dp(16), dp(8), dp(16), dp(8));
-        LinearLayout.LayoutParams ql = new LinearLayout.LayoutParams(-1, dp(50));
-        ql.bottomMargin = dp(10);
-        c.addView(q, ql);
-
         final List<AppItem> all = loadApps();
-        final List<AppItem> shown = new ArrayList<>(all);
+        final List<AppItem> shown = new ArrayList<>();
+        for (String k : favs())
+            for (AppItem a : all) if (key(a).equals(k)) { shown.add(a); break; }
+
+        if (shown.isEmpty()) {
+            LinearLayout empty = col(Gravity.CENTER);
+            empty.addView(txt("Ton accueil est vide", 20, Color.WHITE, true), lp(-2, -2, dp(8)));
+            empty.addView(txt("Choisis les apps à afficher ici.\nToutes tes apps sont derrière le bouton à 4 points.", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(16)));
+            empty.addView(nbtn("Choisir mes apps", v -> appsScreen("pick")), lp(dp(260), dp(54), 0));
+            c.addView(empty, new LinearLayout.LayoutParams(-1, 0, 1f));
+        } else {
+            c.addView(makeGrid(shown, "home", null), new LinearLayout.LayoutParams(-1, 0, 1f));
+        }
+
+        LinearLayout dock = new LinearLayout(this);
+        dock.setOrientation(LinearLayout.HORIZONTAL);
+        dock.setGravity(Gravity.CENTER_VERTICAL);
+        dockBtn(dock, "Fichiers", v -> pickFile());
+        DotsBtn db = new DotsBtn(this);
+        db.setOnClickListener(v -> { tick(); appsScreen("drawer"); });
+        LinearLayout.LayoutParams dbp = new LinearLayout.LayoutParams(dp(64), dp(64));
+        dbp.setMargins(dp(8), dp(8), dp(8), 0);
+        dock.addView(db, dbp);
+        dockBtn(dock, "Réglages", v -> settings());
+        c.addView(dock, new LinearLayout.LayoutParams(-1, -2));
+        show(c, "home");
+    }
+
+    void dockBtn(LinearLayout dock, String s, View.OnClickListener l) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(50), 1f);
+        p.setMargins(dp(4), dp(8), dp(4), 0);
+        dock.addView(nbtn(s, l), p);
+    }
+
+    class DotsBtn extends View {
+        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        DotsBtn(Context c) {
+            super(c);
+            setBackground(neonBox(32, true));
+            setClickable(true);
+            pressFx(this);
+        }
+        @Override protected void onDraw(Canvas cv) {
+            float cx = getWidth() / 2f, cy = getHeight() / 2f, gap = dp(7), r = dp(4.5f);
+            for (int i = 0; i < 4; i++) {
+                float x = cx + ((i % 2 == 0) ? -gap : gap), y = cy + ((i / 2 == 0) ? -gap : gap);
+                p.setColor(withAlpha(C1, 110)); cv.drawCircle(x, y, r * 1.9f, p);
+                p.setColor(Color.WHITE); cv.drawCircle(x, y, r, p);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- liste d'apps (tiroir / choix de l'accueil)
+    GridView makeGrid(final List<AppItem> shown, final String mode, final Set<String> sel) {
         final PackageManager pm = getPackageManager();
         GridView g = new GridView(this);
         g.setNumColumns(GridView.AUTO_FIT);
@@ -239,7 +307,7 @@ public class MainActivity extends Activity {
         g.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
         g.setVerticalSpacing(dp(8));
         g.setSelector(new ColorDrawable(0));
-        final BaseAdapter ad = new BaseAdapter() {
+        g.setAdapter(new BaseAdapter() {
             public int getCount() { return shown.size(); }
             public Object getItem(int i) { return shown.get(i); }
             public long getItemId(int i) { return i; }
@@ -269,16 +337,56 @@ public class MainActivity extends Activity {
                 ImageView iv = (ImageView) v.findViewById(1001);
                 TextView tv = (TextView) v.findViewById(1002);
                 if (a.icon == null) a.icon = a.ri.loadIcon(pm);
+                boolean on = sel != null && sel.contains(key(a));
                 iv.setImageDrawable(a.icon);
-                tv.setText(a.label);
+                iv.setAlpha(sel == null || on ? 1f : 0.3f);
+                tv.setText((on ? "✓ " : "") + a.label);
                 return v;
             }
-        };
-        g.setAdapter(ad);
-        g.setOnItemClickListener((p, v, i, id) -> { tick(); openApp(shown.get(i)); });
-        g.setOnItemLongClickListener((p, v, i, id) -> { appMenu(shown.get(i)); return true; });
-        c.addView(g, new LinearLayout.LayoutParams(-1, 0, 1f));
+        });
+        g.setOnItemClickListener((p, v, i, id) -> {
+            AppItem a = shown.get(i);
+            tick();
+            if (mode.equals("pick")) {
+                String k = key(a);
+                if (!sel.remove(k)) sel.add(k);
+                ((BaseAdapter) p.getAdapter()).notifyDataSetChanged();
+            } else openApp(a);
+        });
+        g.setOnItemLongClickListener((p, v, i, id) -> {
+            if (!mode.equals("pick")) appMenu(shown.get(i), mode);
+            return true;
+        });
+        return g;
+    }
 
+    EditText searchBox(LinearLayout c) {
+        EditText q = new EditText(this);
+        q.setHint("Rechercher une app…");
+        q.setHintTextColor(0x88FFFFFF); q.setTextColor(Color.WHITE);
+        q.setSingleLine(true);
+        q.setBackground(neonBox(16, false));
+        q.setPadding(dp(16), dp(8), dp(16), dp(8));
+        LinearLayout.LayoutParams ql = new LinearLayout.LayoutParams(-1, dp(50));
+        ql.bottomMargin = dp(10);
+        c.addView(q, ql);
+        return q;
+    }
+
+    void appsScreen(final String mode) {
+        final boolean pick = mode.equals("pick");
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(20), dp(12), dp(20), dp(10));
+        c.addView(txt(pick ? "Apps de l'accueil" : "Toutes les apps", 26, Color.WHITE, true), lp(-2, -2, dp(6)));
+        if (pick) c.addView(txt("Touche les apps à afficher sur l'accueil", 13, 0xCCFFFFFF, false), lp(-2, -2, dp(10)));
+        EditText q = searchBox(c);
+
+        final List<AppItem> all = loadApps();
+        final List<AppItem> shown = new ArrayList<>(all);
+        final Set<String> sel = pick ? new LinkedHashSet<String>(favs()) : null;
+        final GridView g = makeGrid(shown, mode, sel);
+        c.addView(g, new LinearLayout.LayoutParams(-1, 0, 1f));
         q.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s, int x, int y, int z) {}
             public void onTextChanged(CharSequence s, int x, int y, int z) {}
@@ -286,30 +394,34 @@ public class MainActivity extends Activity {
                 String k = e.toString().trim().toLowerCase();
                 shown.clear();
                 for (AppItem a : all) if (k.isEmpty() || a.label.toLowerCase().contains(k)) shown.add(a);
-                ad.notifyDataSetChanged();
+                ((BaseAdapter) g.getAdapter()).notifyDataSetChanged();
             }
         });
 
-        LinearLayout dock = new LinearLayout(this);
-        dock.setOrientation(LinearLayout.HORIZONTAL);
-        dockBtn(dock, "Fichiers", v -> pickFile());
-        dockBtn(dock, "Réglages", v -> settings());
-        dockBtn(dock, "Menu", v -> menu());
-        c.addView(dock, new LinearLayout.LayoutParams(-1, -2));
-        show(c, "home");
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        if (pick) {
+            dockBtn(bar, "Annuler", v -> home());
+            dockBtn(bar, "Valider", v -> {
+                List<String> old = favs(), out = new ArrayList<>();
+                for (String k : old) if (sel.contains(k)) out.add(k);
+                for (AppItem a : all) if (sel.contains(key(a)) && !out.contains(key(a))) out.add(key(a));
+                saveFavs(out);
+                home();
+            });
+        } else {
+            dockBtn(bar, "Retour à l'accueil", v -> home());
+        }
+        c.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        show(c, mode);
     }
 
-    void dockBtn(LinearLayout dock, String s, View.OnClickListener l) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(50), 1f);
-        p.setMargins(dp(4), dp(8), dp(4), 0);
-        dock.addView(nbtn(s, l), p);
-    }
-
+    // ---------------------------------------------------------------- reglages
     void settings() {
         LinearLayout c = col(Gravity.CENTER_HORIZONTAL);
         c.addView(txt("Réglages", 34, Color.WHITE, true), lp(-2, -2, dp(18)));
         c.addView(txt("Thème néon", 15, 0xCCFFFFFF, false), lp(-2, -2, dp(10)));
-        LinearLayout row = new LinearLayout(this);
+        LinearLayout[] rows = {new LinearLayout(this), new LinearLayout(this)};
         for (int i = 0; i < THEMES.length; i++) {
             final int k = i;
             View sw = new View(this);
@@ -320,17 +432,21 @@ public class MainActivity extends Activity {
             sw.setOnClickListener(v -> {
                 tick();
                 sp.edit().putInt("theme", k).apply();
-                applyTheme(k); bg.invalidate(); settings();
+                loadTheme(); bg.invalidate(); settings();
             });
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(54), dp(54));
-            p.setMargins(dp(8), 0, dp(8), 0);
-            row.addView(sw, p);
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(46), dp(46));
+            p.setMargins(dp(5), 0, dp(5), 0);
+            rows[i / 5].addView(sw, p);
         }
-        c.addView(row, lp(-2, -2, dp(22)));
+        c.addView(rows[0], lp(-2, -2, dp(10)));
+        c.addView(rows[1], lp(-2, -2, dp(16)));
+        c.addView(nbtn("Palette personnalisée", v -> palette()), lp(dp(320), dp(54), dp(18)));
         c.addView(toggle("Sons", "sfx"), lp(dp(320), dp(54), dp(12)));
         c.addView(toggle("Intro au démarrage", "intro"), lp(dp(320), dp(54), dp(12)));
         c.addView(toggle("Menu de choix au démarrage", "menu"), lp(dp(320), dp(54), dp(12)));
+        c.addView(nbtn("Apps de l'accueil", v -> appsScreen("pick")), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Rejouer l'intro", v -> intro()), lp(dp(320), dp(54), dp(12)));
+        c.addView(nbtn("Menu de démarrage", v -> menu()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Réglages Android", v -> {
             try { startActivity(new Intent(Settings.ACTION_SETTINGS)); } catch (Exception e) { toast("Impossible d'ouvrir les réglages"); }
         }), lp(dp(320), dp(54), dp(12)));
@@ -345,6 +461,81 @@ public class MainActivity extends Activity {
             sp.edit().putBoolean(key, !on).apply();
             settings();
         });
+    }
+
+    // ---------------------------------------------------------------- palette personnalisee
+    View palPreview;
+
+    void palette() {
+        LinearLayout c = col(Gravity.CENTER_HORIZONTAL);
+        c.addView(txt("Palette personnalisée", 28, Color.WHITE, true), lp(-2, -2, dp(18)));
+        palPreview = new View(this);
+        c.addView(palPreview, lp(dp(320), dp(70), dp(16)));
+        updatePreview();
+        c.addView(txt("Couleur principale (contours, lueur)", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(6)));
+        colorPicker(c, true);
+        c.addView(txt("Couleur secondaire (dégradés, fond)", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(6)));
+        colorPicker(c, false);
+        c.addView(nbtn("Retour", v -> settings()), lp(dp(320), dp(54), dp(12)));
+        show(scroll(c), "palette");
+    }
+
+    void updatePreview() {
+        if (palPreview == null) return;
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{C1, C2});
+        g.setCornerRadius(dp(16));
+        g.setStroke(dp(2), Color.WHITE);
+        palPreview.setBackground(g);
+    }
+
+    SeekBar seek(int max, int val, final Runnable onChange) {
+        SeekBar s = new SeekBar(this);
+        s.setMax(max);
+        s.setProgress(val);
+        s.setProgressDrawable(new ColorDrawable(0));
+        s.setPadding(dp(14), 0, dp(14), 0);
+        s.getThumb().setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN);
+        s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar b, int pr, boolean user) { onChange.run(); }
+            public void onStartTrackingTouch(SeekBar b) {}
+            public void onStopTrackingTouch(SeekBar b) {}
+        });
+        return s;
+    }
+
+    void styleSat(SeekBar s, float hue) {
+        GradientDrawable sg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+            new int[]{Color.WHITE, Color.HSVToColor(new float[]{hue, 1f, 1f})});
+        sg.setCornerRadius(dp(18));
+        s.setBackground(sg);
+    }
+
+    void colorPicker(LinearLayout parent, final boolean first) {
+        final float[] hsv = new float[3];
+        Color.colorToHSV(first ? C1 : C2, hsv);
+        final SeekBar[] sb = new SeekBar[2];
+        Runnable change = () -> {
+            hsv[0] = sb[0].getProgress();
+            hsv[1] = sb[1].getProgress() / 100f;
+            hsv[2] = 1f;
+            int col = Color.HSVToColor(hsv);
+            if (first) C1 = col; else C2 = col;
+            sp.edit().putInt("theme", -1).putInt("c1", C1).putInt("c2", C2).apply();
+            styleSat(sb[1], hsv[0]);
+            updatePreview();
+            bg.invalidate();
+        };
+        sb[0] = seek(360, (int) hsv[0], change);
+        sb[1] = seek(100, (int) (hsv[1] * 100), change);
+        GradientDrawable rb = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+            new int[]{0xFFFF0000, 0xFFFFFF00, 0xFF00FF00, 0xFF00FFFF, 0xFF0000FF, 0xFFFF00FF, 0xFFFF0000});
+        rb.setCornerRadius(dp(18));
+        sb[0].setBackground(rb);
+        styleSat(sb[1], hsv[0]);
+        parent.addView(txt("Teinte", 12, 0x99FFFFFF, false), lp(-2, -2, dp(2)));
+        parent.addView(sb[0], lp(dp(320), dp(34), dp(8)));
+        parent.addView(txt("Intensité", 12, 0x99FFFFFF, false), lp(-2, -2, dp(2)));
+        parent.addView(sb[1], lp(dp(320), dp(34), dp(18)));
     }
 
     // ---------------------------------------------------------------- apps
@@ -370,13 +561,22 @@ public class MainActivity extends Activity {
         try { startActivity(i); } catch (Exception e) { toast("Impossible d'ouvrir " + a.label); }
     }
 
-    void appMenu(final AppItem a) {
-        new AlertDialog.Builder(this).setTitle(a.label)
-            .setItems(new String[]{"Infos de l'app", "Désinstaller"}, (dlg, w) -> {
-                Uri u = Uri.parse("package:" + a.pkg);
-                Intent i = (w == 0) ? new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, u) : new Intent(Intent.ACTION_DELETE, u);
-                try { startActivity(i); } catch (Exception e) { toast("Action impossible"); }
-            }).show();
+    void appMenu(final AppItem a, final String mode) {
+        final List<String> fl = favs();
+        final boolean pinned = fl.contains(key(a));
+        String[] items = {pinned ? "Retirer de l'accueil" : "Épingler à l'accueil", "Infos de l'app", "Désinstaller"};
+        new AlertDialog.Builder(this).setTitle(a.label).setItems(items, (dlg, w) -> {
+            if (w == 0) {
+                if (pinned) fl.remove(key(a)); else fl.add(key(a));
+                saveFavs(fl);
+                toast(pinned ? "Retiré de l'accueil" : "Ajouté à l'accueil");
+                if (mode.equals("home")) home();
+                return;
+            }
+            Uri u = Uri.parse("package:" + a.pkg);
+            Intent i = (w == 1) ? new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, u) : new Intent(Intent.ACTION_DELETE, u);
+            try { startActivity(i); } catch (Exception e) { toast("Action impossible"); }
+        }).show();
     }
 
     // Retrouve une app par nom (ou paquet), parmi les apps normales et les launchers
