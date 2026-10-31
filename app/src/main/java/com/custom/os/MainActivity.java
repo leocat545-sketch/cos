@@ -28,6 +28,8 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
 import android.widget.*;
 import java.util.*;
 
@@ -216,6 +218,7 @@ public class MainActivity extends Activity {
         c.addView(sub);
         c.addView(nbtn("Cocoon", v -> launch("cocoon", "Cocoon")), lp(dp(300), dp(58), dp(14)));
         c.addView(nbtn("COs", v -> home()), lp(dp(300), dp(58), dp(14)));
+        c.addView(nbtn("Mon OS", v -> os()), lp(dp(300), dp(58), dp(14)));
         c.addView(nbtn("Réglages", v -> settings()), lp(dp(300), dp(50), dp(14)));
         if (!isHome()) c.addView(nbtn("Définir COs comme launcher", v -> askHome()), lp(dp(300), dp(50), dp(14)));
         show(scroll(c), "menu");
@@ -427,6 +430,26 @@ public class MainActivity extends Activity {
         show(c, mode);
     }
 
+    // ---------------------------------------------------------------- Mon OS (bureau a fenetres dans une WebView)
+    void os() {
+        WebView w = new WebView(this);
+        w.setBackgroundColor(DARK);
+        WebSettings st = w.getSettings();
+        st.setJavaScriptEnabled(true);
+        st.setDomStorageEnabled(true);
+        w.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public void exit() { runOnUiThread(() -> home()); }
+        }, "Android");
+        String q = "?c1=" + String.format("%06x", C1 & 0xFFFFFF) + "&c2=" + String.format("%06x", C2 & 0xFFFFFF);
+        w.loadUrl("file:///android_asset/cos_os.html" + q);
+        w.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            public void onViewAttachedToWindow(View v) {}
+            public void onViewDetachedFromWindow(View v) { try { ((WebView) v).destroy(); } catch (Exception ignored) {} }
+        });
+        show(w, "os");
+    }
+
     // ---------------------------------------------------------------- reglages
     void settings() {
         LinearLayout c = col(Gravity.CENTER_HORIZONTAL);
@@ -456,6 +479,7 @@ public class MainActivity extends Activity {
         c.addView(toggle("Intro au démarrage", "intro"), lp(dp(320), dp(54), dp(12)));
         c.addView(toggle("Menu de choix au démarrage", "menu"), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Apps de l'accueil", v -> appsScreen("pick")), lp(dp(320), dp(54), dp(12)));
+        c.addView(nbtn("Mon OS", v -> os()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Rejouer l'intro", v -> intro()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Menu de démarrage", v -> menu()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Réglages Android", v -> {
