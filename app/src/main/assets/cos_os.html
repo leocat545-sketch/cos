@@ -41,8 +41,8 @@ canvas{display:block;margin:0 auto;border:1px solid var(--c1);border-radius:8px;
 .abtn .gbb{width:64px;height:64px;border-radius:50%;font-weight:700}
 .ss{display:flex;gap:12px;justify-content:center;margin-top:10px}
 .ss .gbb{width:88px;height:34px;font-size:13px;border-radius:17px}
-.gbtop{display:flex;gap:6px;margin-bottom:8px}
-.gbtop .k{flex:1;font-size:14px;height:38px}
+.gbtop{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.gbtop .k{flex:1 1 30%;font-size:14px;height:38px}
 .gbst{font-size:12px;opacity:.75;text-align:center;margin-top:6px;min-height:16px}
 </style></head>
 <body>
@@ -546,13 +546,15 @@ snake:{t:'Snake',i:'🐍',make:function(b,o){
 ,gb:{t:'Game Boy',i:'🎮',w:372,make:function(b,o){
   var cv=el('canvas');cv.width=160;cv.height=144;cv.style.cssText='width:100%;image-rendering:pixelated;aspect-ratio:160/144';
   var ctx=cv.getContext('2d'),img=ctx.createImageData(160,144),fb=new Uint32Array(img.data.buffer),pal=new Uint32Array(4);
-  var g=null,rom=null,pi=2,raf=0,last=0,acc=0,fr=0,lf=-1,key='',ac=null,spn=null,muted=false;
+  var g=null,rom=null,pi=2,raf=0,last=0,acc=0,fr=0,lf=-1,key='',ac=null,spn=null,muted=false,SPD=[1,2,4],si=0,ffh=false,ffg=false,gpPrev=0,gpTxt='';
   var st=el('div','gbst','Charge une ROM (.gb) pour jouer');
+  function mult(){return (ffh||ffg)?4:SPD[si]}
+  function stText(){st.textContent=(g?g.title+(g.hasBattery?' · sauvegarde auto':''):'Charge une ROM (.gb) pour jouer')+gpTxt}
   function hex2(c){var m=/([0-9a-f]{6})/i.exec(c);var n=m?parseInt(m[1],16):16777215;return [n>>16&255,n>>8&255,n&255]}
   function mix(a,c,t){return [0,1,2].map(function(i){return Math.round(a[i]*(1-t)+c[i]*t)})}
   var PS=[['Classique',[[224,248,208],[136,192,112],[52,104,86],[8,24,32]]],['Gris',[[255,255,255],[170,170,170],[85,85,85],[0,0,0]]],['Néon',null]];
   var fi=el('input');fi.type='file';fi.style.display='none';
-  var lb=el('button','k','📂 ROM'),pb=el('button','k',''),rs=el('button','k','↺ Reset'),mb=el('button','k','🔊');
+  var lb=el('button','k','📂 ROM'),pb=el('button','k',''),rs=el('button','k','↺ Reset'),mb=el('button','k','🔊'),sb=el('button','k','⏩ x1');
   function setPal(){
     var p=PS[pi][1];
     if(!p){var a=hex2(cs('--c1')),c=hex2(cs('--c2'));p=[mix(a,[255,255,255],.88),a,c,[8,4,24]]}
@@ -567,7 +569,7 @@ snake:{t:'Snake',i:'🐍',make:function(b,o){
   function start(){
     g=new GB(rom,fb,pal);if(ac)g.setRate(ac.sampleRate);key='cos_gb_'+g.title+'_'+rom.length;
     if(g.hasBattery){var s=ld(key);if(s){try{var bin=atob(s);for(var i=0;i<bin.length&&i<g.eram.length;i++)g.eram[i]=bin.charCodeAt(i)}catch(e){}}}
-    st.textContent=g.title+(g.hasBattery?' · sauvegarde auto':'')}
+    stText()}
   function load(buf){
     var r=new Uint8Array(buf);
     if(r.length<0x150){st.textContent='ROM invalide';return}
@@ -584,15 +586,16 @@ snake:{t:'Snake',i:'🐍',make:function(b,o){
       var gd=0;while(g.avail()<n&&gd++<6)g.frame();
       var got=g.read(L,R,n);
       for(i=got;i<n;i++){L[i]=0;R[i]=0}
-      if(muted){for(i=0;i<n;i++){L[i]=0;R[i]=0}}
+      if(muted||mult()>1){for(i=0;i<n;i++){L[i]=0;R[i]=0}}
     };
     spn.connect(ac.destination);ac.resume()}
   b.addEventListener('pointerup',initAudio);
+  sb.onclick=function(){si=(si+1)%SPD.length;sb.textContent='⏩ x'+SPD[si]};
   mb.onclick=function(){muted=!muted;mb.textContent=muted?'🔇':'🔊'};
   lb.onclick=function(){initAudio();fi.click()};
   pb.onclick=function(){pi=(pi+1)%PS.length;setPal()};
   rs.onclick=function(){if(rom){save();start()}};
-  var top=el('div','gbtop');top.appendChild(lb);top.appendChild(pb);top.appendChild(rs);top.appendChild(mb);
+  var top=el('div','gbtop');top.appendChild(lb);top.appendChild(pb);top.appendChild(rs);top.appendChild(mb);top.appendChild(sb);
   b.appendChild(top);b.appendChild(fi);b.appendChild(cv);b.appendChild(st);
   function mk(txt,bit){
     var d=el('button','gbb',txt);
@@ -607,22 +610,47 @@ snake:{t:'Snake',i:'🐍',make:function(b,o){
   pd.appendChild(dp);pd.appendChild(ab);b.appendChild(pd);
   var ss=el('div','ss');ss.appendChild(mk('SELECT',6));ss.appendChild(mk('START',7));b.appendChild(ss);
   var KM={ArrowRight:0,ArrowLeft:1,ArrowUp:2,ArrowDown:3,z:4,x:5,Shift:6,Enter:7};
-  function kd(e){var k=KM[e.key];if(k!=null&&g){g.press(k,true);e.preventDefault()}}
-  function ku(e){var k=KM[e.key];if(k!=null&&g){g.press(k,false);e.preventDefault()}}
+  function kd(e){if(e.key==='Tab'){ffh=true;e.preventDefault();return}var k=KM[e.key];if(k!=null&&g){g.press(k,true);e.preventDefault()}}
+  function ku(e){if(e.key==='Tab'){ffh=false;e.preventDefault();return}var k=KM[e.key];if(k!=null&&g){g.press(k,false);e.preventDefault()}}
   addEventListener('keydown',kd);addEventListener('keyup',ku);
+  function bt(p,k){return !!(p.buttons[k]&&p.buttons[k].pressed)}
+  function pollPad(){
+    var gps=navigator.getGamepads?navigator.getGamepads():[],m=0,ff=false;
+    for(var i=0;i<gps.length;i++){
+      var p=gps[i];if(!p||!p.connected)continue;
+      var ax=p.axes[0]||0,ay=p.axes[1]||0;
+      if(bt(p,15)||ax>0.5)m|=1;
+      if(bt(p,14)||ax<-0.5)m|=2;
+      if(bt(p,12)||ay<-0.5)m|=4;
+      if(bt(p,13)||ay>0.5)m|=8;
+      if(bt(p,1)||bt(p,3))m|=16;
+      if(bt(p,0)||bt(p,2))m|=32;
+      if(bt(p,8))m|=64;
+      if(bt(p,9))m|=128;
+      if(bt(p,5)||bt(p,7))ff=true;
+    }
+    ffg=ff;
+    if(g){var d=m^gpPrev;for(var q=0;q<8;q++)if(d&(1<<q))g.press(q,!!(m&(1<<q)))}
+    gpPrev=m}
+  function gc(){gpTxt=' · 🎮 manette';stText()}
+  function gd(){gpTxt='';stText()}
+  addEventListener('gamepadconnected',gc);addEventListener('gamepaddisconnected',gd);
   function loop(t){
     raf=requestAnimationFrame(loop);
+    pollPad();
     if(!g){last=t;return}
     var run=ac&&ac.state==='running';
     g.audio=!!run;
     if(run){
+      var mm=mult();
+      if(mm>1){g.audio=false;for(var q3=1;q3<mm;q3++)g.frame();g.audio=true}
       if(g.frames!==lf){lf=g.frames;ctx.putImageData(img,0,0);if(++fr%180==0)save()}
       last=t;acc=0;return}
     acc+=Math.min(t-last,50);last=t;
-    var n=0;while(acc>=16.74&&n<3){g.frame();acc-=16.74;n++}
+    var n=0;while(acc>=16.74&&n<3){for(var q2=0;q2<mult();q2++)g.frame();acc-=16.74;n++}
     if(n){ctx.putImageData(img,0,0);if(++fr%180==0)save()}}
   setPal();raf=requestAnimationFrame(loop);
-  o.stop=function(){cancelAnimationFrame(raf);removeEventListener('keydown',kd);removeEventListener('keyup',ku);save();if(spn){spn.onaudioprocess=null;try{spn.disconnect()}catch(e){}}if(ac){try{ac.close()}catch(e){}}}}}
+  o.stop=function(){cancelAnimationFrame(raf);removeEventListener('keydown',kd);removeEventListener('keyup',ku);removeEventListener('gamepadconnected',gc);removeEventListener('gamepaddisconnected',gd);save();if(spn){spn.onaudioprocess=null;try{spn.disconnect()}catch(e){}}if(ac){try{ac.close()}catch(e){}}}}}
 };
 
 function tasks(){

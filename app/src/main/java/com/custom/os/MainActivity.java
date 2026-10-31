@@ -53,6 +53,17 @@ public class MainActivity extends Activity {
     Bitmap logo;
     boolean inIntro = false, askPending = false;
     ValueCallback<Uri[]> fileCb;
+    int wall = 0;
+    static final String[] WALLS = {"Grille", "Pluie", "Aurore", "Particules", "Warp", "Sobre"};
+    final TextView[] wv = new TextView[3];
+    final NeonBar[] wb = new NeonBar[3];
+    final Runnable widgetTick = new Runnable() {
+        public void run() {
+            if (!screen.equals("home") || wv[0] == null) return;
+            updateWidgets();
+            ui.postDelayed(this, 4000);
+        }
+    };
     String screen = "";
     final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -63,6 +74,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         sp = getSharedPreferences("cos", MODE_PRIVATE);
         loadTheme();
+        wall = sp.getInt("wall", 0);
         getWindow().setStatusBarColor(DARK);
         getWindow().setNavigationBarColor(DARK);
         logo = loadLogo();
@@ -261,6 +273,11 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-1, -2);
         dl.bottomMargin = dp(10);
         c.addView(dt, dl);
+        if (sp.getBoolean("widgets", true)) {
+            LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(-1, -2);
+            wl.bottomMargin = dp(10);
+            c.addView(widgetRow(), wl);
+        }
 
         final List<AppItem> all = loadApps();
         final List<AppItem> shown = new ArrayList<>();
@@ -471,6 +488,81 @@ public class MainActivity extends Activity {
         show(w, "os");
     }
 
+    // ---------------------------------------------------------------- widgets de l'accueil
+    class NeonBar extends View {
+        float frac = 0f;
+        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        NeonBar(Context c) { super(c); }
+        void set(float f) { frac = Math.max(0f, Math.min(1f, f)); invalidate(); }
+        @Override protected void onDraw(Canvas cv) {
+            float w = getWidth(), h = getHeight(), r = h / 2f;
+            p.setShader(null);
+            p.setColor(0x33FFFFFF);
+            cv.drawRoundRect(0, 0, w, h, r, r, p);
+            if (frac > 0) {
+                p.setShader(new LinearGradient(0, 0, w, 0, C1, C2, Shader.TileMode.CLAMP));
+                cv.drawRoundRect(0, 0, Math.max(h, w * frac), h, r, r, p);
+                p.setShader(null);
+            }
+        }
+    }
+
+    View widgetRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        String[] titles = {"Batterie", "Stockage", "Mémoire"};
+        for (int i = 0; i < 3; i++) {
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setBackground(neonBox(14, false));
+            card.setPadding(dp(14), dp(10), dp(14), dp(12));
+            TextView t = new TextView(this);
+            t.setText(titles[i]); t.setTextSize(12); t.setTextColor(0xB3FFFFFF);
+            wv[i] = new TextView(this);
+            wv[i].setTextSize(17); wv[i].setTextColor(Color.WHITE);
+            wv[i].setShadowLayer(dp(8), 0, 0, C1);
+            wv[i].setTypeface(Typeface.DEFAULT_BOLD);
+            wv[i].setSingleLine(true);
+            wb[i] = new NeonBar(this);
+            card.addView(t);
+            card.addView(wv[i]);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, dp(6));
+            bp.topMargin = dp(6);
+            card.addView(wb[i], bp);
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, -2, 1f);
+            cp.setMargins(dp(4), 0, dp(4), 0);
+            row.addView(card, cp);
+        }
+        updateWidgets();
+        ui.removeCallbacks(widgetTick);
+        ui.postDelayed(widgetTick, 4000);
+        return row;
+    }
+
+    String fmtGo(long b) { return String.format(Locale.FRANCE, "%.1f Go", b / 1073741824.0); }
+
+    void updateWidgets() {
+        try {
+            Intent b = registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (b != null) {
+                int lv = b.getIntExtra("level", 0), sc = Math.max(1, b.getIntExtra("scale", 100)), stt = b.getIntExtra("status", 0);
+                boolean ch = (stt == 2 || stt == 5);
+                wv[0].setText((ch ? "⚡ " : "") + (lv * 100 / sc) + " %");
+                wb[0].set(lv / (float) sc);
+            }
+            android.os.StatFs s = new android.os.StatFs(android.os.Environment.getDataDirectory().getPath());
+            long tot = s.getTotalBytes(), used = tot - s.getAvailableBytes();
+            wv[1].setText(fmtGo(used) + " / " + fmtGo(tot));
+            wb[1].set(used / (float) tot);
+            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            long mu = mi.totalMem - mi.availMem;
+            wv[2].setText(fmtGo(mu) + " / " + fmtGo(mi.totalMem));
+            wb[2].set(mu / (float) mi.totalMem);
+        } catch (Exception ignored) {}
+    }
+
     // ---------------------------------------------------------------- reglages
     void settings() {
         LinearLayout c = col(Gravity.CENTER_HORIZONTAL);
@@ -499,6 +591,13 @@ public class MainActivity extends Activity {
         c.addView(toggle("Sons", "sfx"), lp(dp(320), dp(54), dp(12)));
         c.addView(toggle("Intro au démarrage", "intro"), lp(dp(320), dp(54), dp(12)));
         c.addView(toggle("Menu de choix au démarrage", "menu"), lp(dp(320), dp(54), dp(12)));
+        c.addView(toggle("Widgets de l'accueil", "widgets"), lp(dp(320), dp(54), dp(12)));
+        c.addView(nbtn("Fond d'écran : " + WALLS[wall], v -> {
+            wall = (wall + 1) % WALLS.length;
+            sp.edit().putInt("wall", wall).apply();
+            bg.invalidate();
+            settings();
+        }), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Apps de l'accueil", v -> appsScreen("pick")), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Mon OS", v -> os()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Rejouer l'intro", v -> intro()), lp(dp(320), dp(54), dp(12)));
@@ -890,11 +989,13 @@ public class MainActivity extends Activity {
         final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         final long t0 = System.nanoTime();
         final float[] sx = new float[40], sy = new float[40], ss = new float[40];
+        final float[] ra = new float[120], rb2 = new float[120], rc = new float[120];
 
         NeonBg(Context c) {
             super(c);
             Random r = new Random(7);
             for (int i = 0; i < 40; i++) { sx[i] = r.nextFloat(); sy[i] = r.nextFloat() * 0.55f; ss[i] = 0.5f + r.nextFloat(); }
+            for (int i = 0; i < 120; i++) { ra[i] = r.nextFloat(); rb2[i] = r.nextFloat(); rc[i] = 0.4f + r.nextFloat(); }
         }
 
         @Override protected void onDraw(Canvas cv) {
@@ -904,6 +1005,18 @@ public class MainActivity extends Activity {
                 new float[]{0f, 0.6f, 1f}, Shader.TileMode.CLAMP));
             cv.drawRect(0, 0, w, h, p);
             p.setShader(null);
+            switch (wall) {
+                case 1: rain(cv, w, h, t); break;
+                case 2: aurora(cv, w, h, t); break;
+                case 3: particles(cv, w, h, t); break;
+                case 4: warp(cv, w, h, t); break;
+                case 5: break;
+                default: grid(cv, w, h, t);
+            }
+            if (wall != 5) postInvalidateOnAnimation();
+        }
+
+        void grid(Canvas cv, float w, float h, float t) {
             for (int i = 0; i < 40; i++) {
                 float tw = 0.5f + 0.5f * (float) Math.sin(t * ss[i] * 2 + i);
                 p.setColor(withAlpha(0xFFFFFF, (int) (40 + 120 * tw)));
@@ -939,7 +1052,64 @@ public class MainActivity extends Activity {
             p.setShader(new LinearGradient(0, 0, w, 0, new int[]{0, withAlpha(C2, 170), 0}, new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
             cv.drawRect(0, hy - dp(1), w, hy + dp(1), p);
             p.setShader(null);
-            postInvalidateOnAnimation();
+        }
+
+        void rain(Canvas cv, float w, float h, float t) {
+            int cols = 26;
+            float cw = w / cols, len = dp(14);
+            for (int i = 0; i < cols; i++) {
+                float spd = 0.12f + 0.25f * ra[i];
+                float head = ((t * spd + rb2[i]) % 1.25f - 0.1f) * h;
+                float x = i * cw + cw / 2;
+                for (int j = 0; j < 14; j++) {
+                    float y = head - j * len;
+                    if (y < -len || y > h) continue;
+                    int al = (int) (200 * (1f - j / 14f) * (0.35f + 0.65f * rc[i] / 1.4f));
+                    p.setColor(withAlpha(j == 0 ? 0xFFFFFF : (((i & 1) == 0) ? C1 : C2), al));
+                    cv.drawRect(x - dp(1.5f), y, x + dp(1.5f), y + len * 0.8f, p);
+                }
+            }
+        }
+
+        void aurora(Canvas cv, float w, float h, float t) {
+            for (int i = 0; i < 3; i++) {
+                float cx = w * (0.5f + 0.35f * (float) Math.sin(t * 0.30f + i * 2.1f));
+                float cy = h * (0.40f + 0.22f * (float) Math.cos(t * 0.23f + i * 1.7f));
+                float r = Math.max(w, h) * (0.45f + 0.08f * i);
+                p.setShader(new RadialGradient(cx, cy, r, new int[]{withAlpha(i == 1 ? C2 : C1, 120), 0}, null, Shader.TileMode.CLAMP));
+                cv.drawCircle(cx, cy, r, p);
+            }
+            p.setShader(null);
+        }
+
+        void particles(Canvas cv, float w, float h, float t) {
+            for (int i = 0; i < 70; i++) {
+                float x = ((ra[i] + t * 0.01f * (rc[i] - 0.7f)) % 1f + 1f) % 1f;
+                float y = ((rb2[i] - t * 0.02f * rc[i]) % 1f + 1f) % 1f;
+                float r = dp(1.5f + 3.5f * rc[i] / 1.4f);
+                int col = ((i & 1) == 0) ? C1 : C2;
+                float tw = 0.6f + 0.4f * (float) Math.sin(t * rc[i] * 2 + i);
+                p.setColor(withAlpha(col, (int) (50 * tw)));
+                cv.drawCircle(x * w, y * h, r * 2.6f, p);
+                p.setColor(withAlpha(col, (int) (200 * tw)));
+                cv.drawCircle(x * w, y * h, r, p);
+            }
+        }
+
+        void warp(Canvas cv, float w, float h, float t) {
+            float cx = w / 2, cy = h / 2, maxR = (float) Math.hypot(cx, cy);
+            p.setStyle(Paint.Style.STROKE);
+            for (int i = 0; i < 120; i++) {
+                float ang = ra[i] * 6.2832f;
+                float f = (t * (0.10f + 0.12f * rc[i]) + rb2[i]) % 1f;
+                float f0 = Math.max(0f, f - 0.05f);
+                float r1 = f * f * maxR, r0 = f0 * f0 * maxR;
+                p.setStrokeWidth(dp(0.6f + 2f * f));
+                p.setColor(withAlpha((i % 3 == 0) ? C1 : 0xFFFFFF, (int) (230 * f)));
+                float ca = (float) Math.cos(ang), sa = (float) Math.sin(ang);
+                cv.drawLine(cx + ca * r0, cy + sa * r0, cx + ca * r1, cy + sa * r1, p);
+            }
+            p.setStyle(Paint.Style.FILL);
         }
     }
 }
