@@ -1,6 +1,8 @@
 package com.custom.os;
 
 import android.app.Activity;
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
@@ -196,12 +198,21 @@ public class MainActivity extends Activity {
         if (logo != null) {
             ImageView iv = new ImageView(this);
             iv.setImageBitmap(logo);
-            c.addView(iv, lp(dp(150), dp(150), 0));
+            c.addView(iv, lp(dp(210), dp(210), 0));
+            final ObjectAnimator fl = ObjectAnimator.ofFloat(iv, "translationY", -dp(7), dp(7));
+            fl.setDuration(2400);
+            fl.setRepeatCount(ValueAnimator.INFINITE);
+            fl.setRepeatMode(ValueAnimator.REVERSE);
+            fl.start();
+            iv.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+                public void onViewAttachedToWindow(View v) {}
+                public void onViewDetachedFromWindow(View v) { fl.cancel(); }
+            });
         } else {
             c.addView(txt("COs", 54, Color.WHITE, true));
         }
         TextView sub = txt("Choisis un système", 16, 0xCCFFFFFF, false);
-        sub.setPadding(0, dp(12), 0, dp(20));
+        sub.setPadding(0, dp(8), 0, dp(18));
         c.addView(sub);
         c.addView(nbtn("Cocoon", v -> launch("cocoon", "Cocoon")), lp(dp(300), dp(58), dp(14)));
         c.addView(nbtn("COs", v -> home()), lp(dp(300), dp(58), dp(14)));
@@ -848,7 +859,17 @@ public class MainActivity extends Activity {
                 p.setColor(withAlpha(0xFFFFFF, (int) (40 + 120 * tw)));
                 cv.drawCircle(sx[i] * w, sy[i] * h, dp(1.2f) * ss[i], p);
             }
-            float hy = h * 0.58f;
+            float cyc = t % 7f;
+            if (cyc < 0.9f) {
+                float u = cyc / 0.9f;
+                float x0 = w * 0.78f - u * w * 0.35f, y0 = h * 0.08f + u * h * 0.22f;
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(dp(2));
+                p.setColor(withAlpha(0xFFFFFF, (int) (220 * (1 - u))));
+                cv.drawLine(x0, y0, x0 + dp(64), y0 - dp(26), p);
+                p.setStyle(Paint.Style.FILL);
+            }
+            float hy = h * 0.68f;
             p.setShader(new RadialGradient(w / 2, hy, w * 0.45f, new int[]{withAlpha(C2, 90), 0}, null, Shader.TileMode.CLAMP));
             cv.drawCircle(w / 2, hy, w * 0.45f, p);
             p.setShader(null);
@@ -859,14 +880,15 @@ public class MainActivity extends Activity {
             for (int i = 0; i < n; i++) {
                 float f = (i + phase) / n;
                 float y = hy + (h - hy) * f * f;
-                p.setColor(withAlpha(C1, (int) (30 + 150 * f)));
+                p.setColor(withAlpha(C1, (int) (8 + 175 * f)));
                 cv.drawLine(0, y, w, y, p);
             }
             p.setColor(withAlpha(C1, 110));
             for (int k = -12; k <= 12; k++) cv.drawLine(w / 2 + k * w * 0.02f, hy, w / 2 + k * w * 0.11f, h, p);
             p.setStyle(Paint.Style.FILL);
-            p.setColor(withAlpha(C2, 200));
+            p.setShader(new LinearGradient(0, 0, w, 0, new int[]{0, withAlpha(C2, 170), 0}, new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
             cv.drawRect(0, hy - dp(1), w, hy + dp(1), p);
+            p.setShader(null);
             postInvalidateOnAnimation();
         }
     }
