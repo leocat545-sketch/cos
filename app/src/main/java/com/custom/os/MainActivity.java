@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.AlertDialog;
+import android.app.DownloadManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
@@ -64,7 +65,36 @@ public class MainActivity extends Activity {
     ValueCallback<Uri[]> fileCb;
     int wall = 0;
     static final String ACT_INSTALL = "com.custom.os.INSTALL_RESULT";
-    static class PackItem { String file, path, pkg, label; Drawable icon; }
+    static class PackItem {
+        String file, path, pkg, label, url;
+        Drawable icon;
+        boolean online;
+        long dlId = -1;
+        int pct = 0;
+        TextView stateTv;
+    }
+    final Map<Long, PackItem> dlWait = new HashMap<>();
+    final BroadcastReceiver dlRcv = new BroadcastReceiver() {
+        @Override public void onReceive(Context ctx, Intent i) { onDownloadComplete(i); }
+    };
+    final Runnable pollTick = new Runnable() {
+        public void run() {
+            if (dlWait.isEmpty()) return;
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            for (Map.Entry<Long, PackItem> e : new ArrayList<>(dlWait.entrySet())) {
+                PackItem it = e.getValue();
+                try (Cursor c = dm.query(new DownloadManager.Query().setFilterById(e.getKey()))) {
+                    if (c != null && c.moveToFirst()) {
+                        long got = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                        long tot = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                        it.pct = tot > 0 ? (int) (got * 100 / tot) : 0;
+                        if (it.stateTv != null && screen.equals("pack")) it.stateTv.setText(stateText(it, false));
+                    }
+                } catch (Exception ignored) {}
+            }
+            ui.postDelayed(this, 1000);
+        }
+    };
     List<PackItem> packItems = new ArrayList<>();
     List<PackItem> queue = new ArrayList<>();
     int qi = 0;
@@ -106,6 +136,9 @@ public class MainActivity extends Activity {
         android.content.IntentFilter inf = new android.content.IntentFilter(ACT_INSTALL);
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(installRcv, inf, Context.RECEIVER_NOT_EXPORTED);
         else registerReceiver(installRcv, inf);
+        android.content.IntentFilter dlf = new android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(dlRcv, dlf, Context.RECEIVER_EXPORTED);
+        else registerReceiver(dlRcv, dlf);
         askPending = (b == null && !isHome());
         if (b == null && !introDone && sp.getBoolean("intro", true)) intro();
         else enter();
@@ -126,6 +159,7 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         super.onDestroy();
         try { unregisterReceiver(installRcv); } catch (Exception ignored) {}
+        try { unregisterReceiver(dlRcv); } catch (Exception ignored) {}
     }
 
     @Override protected void onNewIntent(Intent i) { // appui sur Accueil
@@ -141,7 +175,7 @@ public class MainActivity extends Activity {
         inIntro = false;
         if (sp.getBoolean("menu", true)) menu(); else home();
         if (askPending) { askPending = false; ui.postDelayed(this::askHome, 400); }
-        if (packFiles().length > 0 && !sp.getBoolean("packAsked", false)) {
+        if (hasPack() && !sp.getBoolean("packAsked", false)) {
             sp.edit().putBoolean("packAsked", true).apply();
             ui.postDelayed(this::pack, 1500);
         }
@@ -277,7 +311,7 @@ public class MainActivity extends Activity {
         c.addView(nbtn("Cocoon", v -> launch("cocoon", "Cocoon")), lp(dp(300), dp(58), dp(14)));
         c.addView(nbtn("COs", v -> home()), lp(dp(300), dp(58), dp(14)));
         c.addView(nbtn("Mon OS", v -> os()), lp(dp(300), dp(58), dp(14)));
-        if (packFiles().length > 0) c.addView(nbtn("Pack d'apps", v -> pack()), lp(dp(300), dp(58), dp(14)));
+        if (hasPack()) c.addView(nbtn("Pack d'apps", v -> pack()), lp(dp(300), dp(58), dp(14)));
         c.addView(nbtn("Réglages", v -> settings()), lp(dp(300), dp(50), dp(14)));
         if (!isHome()) c.addView(nbtn("Définir COs comme launcher", v -> askHome()), lp(dp(300), dp(50), dp(14)));
         show(scroll(c), "menu");
@@ -555,10 +589,94 @@ public class MainActivity extends Activity {
         try { getPackageManager().getPackageInfo(pkg, 0); return true; } catch (Exception e) { return false; }
     }
 
+    // liste "Nom|lien" fournie par l'outil (apps trop grosses pour etre incluses)
+    List<String[]> onlineList() {
+        List<String[]> out = new ArrayList<>();
+        try (InputStream in = getAssets().open("pack/online.txt")) {
+            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(in, "UTF-8"));
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                int k = line.indexOf('|');
+                if (k <= 0) continue;
+                String url = line.substring(k + 1).trim();
+                if (url.startsWith("http")) out.add(new String[]{line.substring(0, k).trim(), url});
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    boolean hasPack() { return packFiles().length > 0 || !onlineList().isEmpty(); }
+
+    boolean installedItem(PackItem it) {
+        if (it.online) return find(it.label.toLowerCase()) != null;
+        return it.pkg != null && isInstalled(it.pkg);
+    }
+
+    String stateText(PackItem it, boolean inst) {
+        if (inst) return "✓ Installée";
+        if (it.online) {
+            if (it.dlId >= 0) return "Téléchargement " + it.pct + " %";
+            if (new File(it.path).exists()) return "Téléchargée";
+            return "À télécharger";
+        }
+        return "À installer";
+    }
+
+    void downloadThenInstall(PackItem it) {
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            File part = new File(it.path + ".part");
+            part.delete();
+            DownloadManager.Request r = new DownloadManager.Request(Uri.parse(it.url));
+            r.setTitle(it.label);
+            r.setDestinationUri(Uri.fromFile(part));
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE);
+            it.dlId = dm.enqueue(r);
+            it.pct = 0;
+            dlWait.put(it.dlId, it);
+            toast("Téléchargement de " + it.label + "…");
+            ui.removeCallbacks(pollTick);
+            ui.postDelayed(pollTick, 1000);
+            if (it.stateTv != null) it.stateTv.setText(stateText(it, false));
+        } catch (Exception e) {
+            toast("Téléchargement impossible : " + it.label);
+            it.dlId = -1;
+            if (queueOn) { qi++; installNext(); }
+        }
+    }
+
+    void onDownloadComplete(Intent i) {
+        long id = i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+        PackItem it = dlWait.remove(id);
+        if (it == null) return;
+        boolean ok = false;
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            try (Cursor c = dm.query(new DownloadManager.Query().setFilterById(id))) {
+                if (c != null && c.moveToFirst())
+                    ok = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) == DownloadManager.STATUS_SUCCESSFUL;
+            }
+        } catch (Exception ignored) {}
+        it.dlId = -1;
+        boolean current = queueOn && qi < queue.size() && queue.get(qi) == it;
+        if (ok) {
+            new File(it.path + ".part").renameTo(new File(it.path));
+            if (current) installOne(it);
+            else if (screen.equals("pack")) packScreen();
+        } else {
+            new File(it.path + ".part").delete();
+            toast("Téléchargement échoué : " + it.label);
+            if (current) { qi++; installNext(); }
+            else if (screen.equals("pack")) packScreen();
+        }
+    }
+
     void pack() {
         LinearLayout c0 = col(Gravity.CENTER);
         c0.addView(txt("Chargement du pack…", 18, Color.WHITE, true));
         show(c0, "pack");
+        final List<PackItem> old = new ArrayList<>(packItems);
         new Thread(() -> {
             final List<PackItem> items = new ArrayList<>();
             PackageManager pm = getPackageManager();
@@ -582,6 +700,20 @@ public class MainActivity extends Activity {
                 } catch (Exception ignored) {}
                 items.add(it);
             }
+            for (String[] o : onlineList()) {
+                PackItem it = null;
+                for (PackItem p : old) if (p.online && p.label.equals(o[0])) it = p;
+                if (it == null) {
+                    it = new PackItem();
+                    it.online = true; it.label = o[0]; it.url = o[1];
+                    it.file = o[0].replaceAll("[^A-Za-z0-9._-]", "_") + ".apk";
+                    File ext = getExternalFilesDir(null);
+                    File d = new File(ext != null ? ext : getCacheDir(), "pack");
+                    d.mkdirs();
+                    it.path = new File(d, it.file).getAbsolutePath();
+                }
+                items.add(it);
+            }
             runOnUiThread(() -> { packItems = items; packScreen(); });
         }).start();
     }
@@ -595,8 +727,8 @@ public class MainActivity extends Activity {
         if (packItems.isEmpty()) c.addView(txt("Aucune app dans le pack.", 16, Color.WHITE, false), lp(-2, -2, dp(16)));
         for (PackItem it : packItems) {
             final PackItem fit = it;
-            boolean inst = it.pkg != null && isInstalled(it.pkg);
-            if (!inst && it.pkg != null) todo++;
+            boolean inst = installedItem(it);
+            if (!inst && (it.pkg != null || it.online)) todo++;
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -604,6 +736,7 @@ public class MainActivity extends Activity {
             row.setPadding(dp(12), dp(10), dp(12), dp(10));
             ImageView iv = new ImageView(this);
             if (it.icon != null) iv.setImageDrawable(it.icon);
+            else if (it.online) iv.setImageResource(android.R.drawable.sym_def_app_icon);
             row.addView(iv, new LinearLayout.LayoutParams(dp(46), dp(46)));
             LinearLayout info = new LinearLayout(this);
             info.setOrientation(LinearLayout.VERTICAL);
@@ -612,16 +745,17 @@ public class MainActivity extends Activity {
             t1.setText(it.label); t1.setTextColor(Color.WHITE); t1.setTextSize(16);
             t1.setTypeface(Typeface.DEFAULT_BOLD);
             TextView t2 = new TextView(this);
-            t2.setText(it.pkg == null ? "APK illisible" : it.pkg); t2.setTextColor(0x99FFFFFF); t2.setTextSize(11);
+            t2.setText(it.online ? "Téléchargé depuis internet" : (it.pkg == null ? "APK illisible" : it.pkg)); t2.setTextColor(0x99FFFFFF); t2.setTextSize(11);
             info.addView(t1); info.addView(t2);
             row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
             TextView state = new TextView(this);
-            state.setText(inst ? "✓ Installée" : "À installer");
+            it.stateTv = state;
+            state.setText(stateText(it, inst));
             state.setTextColor(inst ? 0xFF69F0AE : Color.WHITE);
             state.setTextSize(13);
             row.addView(state);
             row.setOnClickListener(v -> {
-                if (fit.pkg == null) return;
+                if (fit.pkg == null && !fit.online) return;
                 tick();
                 List<PackItem> one = new ArrayList<>();
                 one.add(fit);
@@ -631,7 +765,7 @@ public class MainActivity extends Activity {
         }
         if (todo > 0) c.addView(nbtn("Installer tout (" + todo + ")", v -> {
             List<PackItem> l = new ArrayList<>();
-            for (PackItem p : packItems) if (p.pkg != null && !isInstalled(p.pkg)) l.add(p);
+            for (PackItem p : packItems) if ((p.pkg != null || p.online) && !installedItem(p)) l.add(p);
             startQueue(l);
         }), lp(dp(460), dp(56), dp(12)));
         c.addView(nbtn("Retour", v -> home()), lp(dp(460), dp(54), dp(12)));
@@ -663,6 +797,16 @@ public class MainActivity extends Activity {
     }
 
     void installOne(PackItem it) {
+        if (it.online) {
+            if (!new File(it.path).exists()) { downloadThenInstall(it); return; }
+            if (it.pkg == null) {
+                try {
+                    android.content.pm.PackageInfo inf = getPackageManager().getPackageArchiveInfo(it.path, 0);
+                    if (inf != null) it.pkg = inf.packageName;
+                } catch (Exception ignored) {}
+                if (it.pkg == null) { toast("APK illisible : " + it.label); qi++; installNext(); return; }
+            }
+        }
         try {
             PackageInstaller pi = getPackageManager().getPackageInstaller();
             PackageInstaller.SessionParams prm = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
@@ -702,6 +846,8 @@ public class MainActivity extends Activity {
             String m = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
             toast("Installation non terminée" + (m != null ? " : " + m : ""));
         }
+        if (status == PackageInstaller.STATUS_SUCCESS && queueOn && qi < queue.size() && queue.get(qi).online)
+            new File(queue.get(qi).path).delete();
         if (queueOn) {
             qi++;
             if (resumed) ui.postDelayed(this::installNext, 300);
@@ -821,7 +967,7 @@ public class MainActivity extends Activity {
         }), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Apps de l'accueil", v -> appsScreen("pick")), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Mon OS", v -> os()), lp(dp(320), dp(54), dp(12)));
-        if (packFiles().length > 0) c.addView(nbtn("Pack d'apps", v -> pack()), lp(dp(320), dp(54), dp(12)));
+        if (hasPack()) c.addView(nbtn("Pack d'apps", v -> pack()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Rejouer l'intro", v -> intro()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Menu de démarrage", v -> menu()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Réglages Android", v -> {
