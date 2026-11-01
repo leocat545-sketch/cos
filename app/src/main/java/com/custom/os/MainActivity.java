@@ -18,6 +18,8 @@ import android.graphics.*;
 import android.graphics.drawable.*;
 import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.MediaMetadataRetriever;
+import android.media.MediaPlayer;
 import android.media.AudioTrack;
 import android.net.Uri;
 import android.os.Build;
@@ -47,7 +49,7 @@ import java.util.*;
 
 /** COs 1.0 - launcher neon : intro, menu Cocoon/COs, accueil avec apps, reglages */
 public class MainActivity extends Activity {
-    static final int PICK = 1, HOME_REQ = 2, FILE_REQ = 3;
+    static final int PICK = 1, HOME_REQ = 2, FILE_REQ = 3, MUSIC_REQ = 4;
     static final int DARK = 0xFF05030F;
     static final int[][] THEMES = {
         {0xFF00E5FF, 0xFFD500F9}, {0xFF39FF14, 0xFF00E5FF}, {0xFFFF9100, 0xFFFF1744},
@@ -64,6 +66,27 @@ public class MainActivity extends Activity {
     boolean inIntro = false, askPending = false;
     ValueCallback<Uri[]> fileCb;
     int wall = 0;
+    MediaPlayer mp;
+    boolean mpReady = false, userPaused = false, autoPaused = false, focusPaused = false;
+    int cur = 0;
+    String curPath = "";
+    List<File> tracks = new ArrayList<>();
+    final Map<String, String[]> meta = new HashMap<>();
+    TextView npTv, ppBtn;
+    final AudioManager.OnAudioFocusChangeListener focusL = ch -> {
+        try {
+            if (mp == null) return;
+            if (ch == AudioManager.AUDIOFOCUS_LOSS || ch == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                if (mp.isPlaying()) { mp.pause(); focusPaused = true; }
+            } else if (ch == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
+                mp.setVolume(0.25f, 0.25f);
+            } else if (ch == AudioManager.AUDIOFOCUS_GAIN) {
+                mp.setVolume(1f, 1f);
+                if (focusPaused && !userPaused && !autoPaused && mpReady) mp.start();
+                focusPaused = false;
+            }
+        } catch (Exception ignored) {}
+    };
     static final String ACT_INSTALL = "com.custom.os.INSTALL_RESULT";
     static class PackItem {
         String file, path, pkg, label, url;
@@ -160,6 +183,7 @@ public class MainActivity extends Activity {
         super.onDestroy();
         try { unregisterReceiver(installRcv); } catch (Exception ignored) {}
         try { unregisterReceiver(dlRcv); } catch (Exception ignored) {}
+        releasePlayer();
     }
 
     @Override protected void onNewIntent(Intent i) { // appui sur Accueil
@@ -174,6 +198,7 @@ public class MainActivity extends Activity {
     void enter() {
         inIntro = false;
         if (sp.getBoolean("menu", true)) menu(); else home();
+        musicStart();
         if (askPending) { askPending = false; ui.postDelayed(this::askHome, 400); }
         if (hasPack() && !sp.getBoolean("packAsked", false)) {
             sp.edit().putBoolean("packAsked", true).apply();
@@ -208,6 +233,12 @@ public class MainActivity extends Activity {
 
     void show(View v, String name) {
         screen = name;
+        if (name.equals("os")) {
+            try { if (mp != null && mpReady && mp.isPlaying()) { mp.pause(); autoPaused = true; } } catch (Exception ignored) {}
+        } else if (autoPaused) {
+            autoPaused = false;
+            try { if (!userPaused && mp != null && mpReady) mp.start(); } catch (Exception ignored) {}
+        }
         content.removeAllViews();
         content.addView(v, new FrameLayout.LayoutParams(-1, -1));
         v.setAlpha(0f);
@@ -564,6 +595,274 @@ public class MainActivity extends Activity {
             public void onViewDetachedFromWindow(View v) { try { ((WebView) v).destroy(); } catch (Exception ignored) {} }
         });
         show(w, "os");
+    }
+
+    // ---------------------------------------------------------------- musique (playlist)
+    File musicDir() {
+        File d = new File(getFilesDir(), "music");
+        d.mkdirs();
+        return d;
+    }
+
+    void ensureDefault() {
+        if (sp.getBoolean("defRemoved", false)) return;
+        File f = new File(musicDir(), "like_forever.mp3");
+        if (f.exists()) return;
+        try { copyAsset("music/like_forever.mp3", f); } catch (Exception e) { f.delete(); }
+    }
+
+    List<File> listTracks() {
+        List<File> out = new ArrayList<>();
+        File[] fs = musicDir().listFiles();
+        if (fs != null) for (File f : fs) if (f.isFile() && f.getName().toLowerCase().endsWith(".mp3")) out.add(f);
+        Collections.sort(out, (a, b) -> {
+            boolean da = a.getName().equals("like_forever.mp3"), db = b.getName().equals("like_forever.mp3");
+            if (da != db) return da ? -1 : 1;
+            return Long.compare(a.lastModified(), b.lastModified());
+        });
+        return out;
+    }
+
+    String[] trackMeta(File f) {
+        String[] m = meta.get(f.getAbsolutePath());
+        if (m != null) return m;
+        String title = null, artist = null;
+        MediaMetadataRetriever r = new MediaMetadataRetriever();
+        try {
+            r.setDataSource(f.getAbsolutePath());
+            title = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE);
+            artist = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST);
+        } catch (Exception ignored) {}
+        try { r.release(); } catch (Exception ignored) {}
+        if (title == null || title.trim().isEmpty()) {
+            String n = f.getName();
+            int k = n.lastIndexOf('.');
+            if (k > 0) n = n.substring(0, k);
+            title = n.replace('_', ' ');
+        }
+        m = new String[]{title.trim(), artist == null ? "" : artist.trim()};
+        meta.put(f.getAbsolutePath(), m);
+        return m;
+    }
+
+    void musicStart() {
+        if (!sp.getBoolean("music", false) || mp != null) return;
+        ensureDefault();
+        tracks = listTracks();
+        if (tracks.isEmpty()) return;
+        playTrack(Math.min(cur, tracks.size() - 1));
+    }
+
+    void releasePlayer() {
+        if (mp != null) {
+            try { mp.release(); } catch (Exception ignored) {}
+            mp = null;
+        }
+        mpReady = false;
+        try { ((AudioManager) getSystemService(Context.AUDIO_SERVICE)).abandonAudioFocus(focusL); } catch (Exception ignored) {}
+    }
+
+    void playTrack(int i) {
+        if (tracks.isEmpty()) return;
+        cur = ((i % tracks.size()) + tracks.size()) % tracks.size();
+        curPath = tracks.get(cur).getAbsolutePath();
+        if (mp != null) { try { mp.release(); } catch (Exception ignored) {} mp = null; }
+        mpReady = false;
+        try {
+            mp = new MediaPlayer();
+            mp.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            mp.setDataSource(curPath);
+            mp.setOnPreparedListener(m -> {
+                mpReady = true;
+                if (!userPaused && !autoPaused) {
+                    try { ((AudioManager) getSystemService(Context.AUDIO_SERVICE)).requestAudioFocus(focusL, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN); } catch (Exception ignored) {}
+                    m.start();
+                }
+                refreshPlayerUi();
+            });
+            mp.setOnCompletionListener(m -> playTrack(cur + 1));
+            mp.setOnErrorListener((m, w, x) -> { releasePlayer(); refreshPlayerUi(); return true; });
+            mp.prepareAsync();
+        } catch (Exception e) {
+            releasePlayer();
+            toast("Lecture impossible");
+        }
+        refreshPlayerUi();
+    }
+
+    boolean isPlayingNow() {
+        try { return mp != null && mpReady && mp.isPlaying(); } catch (Exception e) { return false; }
+    }
+
+    void togglePlay() {
+        if (!sp.getBoolean("music", false)) sp.edit().putBoolean("music", true).apply();
+        if (mp == null) { userPaused = false; musicStart(); }
+        else if (isPlayingNow()) { try { mp.pause(); } catch (Exception ignored) {} userPaused = true; }
+        else { userPaused = false; try { if (mpReady) mp.start(); } catch (Exception ignored) {} }
+        refreshPlayerUi();
+    }
+
+    void setMusic(boolean on) {
+        sp.edit().putBoolean("music", on).apply();
+        if (on) { userPaused = false; musicStart(); }
+        else { releasePlayer(); }
+    }
+
+    void refreshPlayerUi() {
+        if (!screen.equals("music") || npTv == null) return;
+        String t = "—";
+        if (mp != null && !tracks.isEmpty() && cur < tracks.size()) {
+            String[] m = trackMeta(tracks.get(cur));
+            t = m[0] + (m[1].isEmpty() ? "" : "  ·  " + m[1]);
+        }
+        npTv.setText(t);
+        ppBtn.setText(isPlayingNow() ? "⏸" : "▶");
+    }
+
+    void musicScreen() {
+        ensureDefault();
+        tracks = listTracks();
+        if (mp != null) {
+            int k = -1;
+            for (int j = 0; j < tracks.size(); j++) if (tracks.get(j).getAbsolutePath().equals(curPath)) k = j;
+            if (k >= 0) cur = k;
+        }
+        boolean on = sp.getBoolean("music", false);
+        LinearLayout c = col(Gravity.CENTER_HORIZONTAL);
+        c.addView(txt("Musique ♪", 30, Color.WHITE, true), lp(-2, -2, dp(12)));
+        c.addView(nbtn("Musique : " + (on ? "ON" : "OFF"), v -> { setMusic(!sp.getBoolean("music", false)); musicScreen(); }), lp(dp(460), dp(54), dp(12)));
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.setBackground(neonBox(16, true));
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        npTv = new TextView(this);
+        npTv.setTextColor(Color.WHITE); npTv.setTextSize(16); npTv.setGravity(Gravity.CENTER);
+        npTv.setShadowLayer(dp(8), 0, 0, C1);
+        card.addView(npTv, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout ctl = new LinearLayout(this);
+        ctl.setOrientation(LinearLayout.HORIZONTAL);
+        ctl.setGravity(Gravity.CENTER);
+        TextView prev = nbtn("⏮", v -> { userPaused = false; if (tracks.isEmpty()) return; if (mp == null) { sp.edit().putBoolean("music", true).apply(); } playTrack(cur - 1); });
+        ppBtn = nbtn("▶", v -> togglePlay());
+        TextView next = nbtn("⏭", v -> { userPaused = false; if (tracks.isEmpty()) return; if (mp == null) { sp.edit().putBoolean("music", true).apply(); } playTrack(cur + 1); });
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(76), dp(52));
+        bp.setMargins(dp(6), dp(10), dp(6), 0);
+        ctl.addView(prev, bp); ctl.addView(ppBtn, bp); ctl.addView(next, bp);
+        card.addView(ctl);
+        c.addView(card, lp(dp(460), -2, dp(14)));
+
+        c.addView(txt("Playlist (" + tracks.size() + ")", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(8)));
+        if (tracks.isEmpty()) c.addView(txt("Aucun morceau. Importe des MP3 ci-dessous.", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(12)));
+        for (int j = 0; j < tracks.size(); j++) {
+            final int idx = j;
+            final File tf = tracks.get(j);
+            String[] m = trackMeta(tf);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setBackground(neonBox(14, false));
+            row.setPadding(dp(14), dp(8), dp(6), dp(8));
+            LinearLayout info = new LinearLayout(this);
+            info.setOrientation(LinearLayout.VERTICAL);
+            TextView t1 = new TextView(this);
+            t1.setText((tf.getAbsolutePath().equals(curPath) && mp != null ? "♪ " : "") + m[0]);
+            t1.setTextColor(Color.WHITE); t1.setTextSize(15); t1.setSingleLine(true);
+            t1.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            info.addView(t1);
+            if (!m[1].isEmpty()) {
+                TextView t2 = new TextView(this);
+                t2.setText(m[1]); t2.setTextColor(0x99FFFFFF); t2.setTextSize(11);
+                info.addView(t2);
+            }
+            row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView del = new TextView(this);
+            del.setText("✕"); del.setTextColor(Color.WHITE); del.setTextSize(18);
+            del.setGravity(Gravity.CENTER);
+            del.setOnClickListener(v -> confirmRemove(tf));
+            row.addView(del, new LinearLayout.LayoutParams(dp(48), dp(44)));
+            row.setOnClickListener(v -> {
+                tick();
+                sp.edit().putBoolean("music", true).apply();
+                userPaused = false;
+                playTrack(idx);
+            });
+            c.addView(row, lp(dp(460), -2, dp(8)));
+        }
+        c.addView(nbtn("Importer des MP3", v -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.setType("audio/*");
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            try { startActivityForResult(i, MUSIC_REQ); } catch (Exception e) { toast("Sélecteur indisponible"); }
+        }), lp(dp(460), dp(54), dp(10)));
+        if (sp.getBoolean("defRemoved", false))
+            c.addView(nbtn("Remettre « Like Forever »", v -> {
+                sp.edit().putBoolean("defRemoved", false).apply();
+                ensureDefault();
+                musicScreen();
+            }), lp(dp(460), dp(54), dp(10)));
+        c.addView(nbtn("Retour", v -> settings()), lp(dp(460), dp(54), dp(12)));
+        show(scroll(c), "music");
+        refreshPlayerUi();
+    }
+
+    void confirmRemove(final File f) {
+        String[] m = trackMeta(f);
+        new AlertDialog.Builder(this).setTitle("Retirer ce morceau ?").setMessage(m[0])
+            .setNegativeButton("Annuler", null)
+            .setPositiveButton("Retirer", (d, w) -> removeTrack(f)).show();
+    }
+
+    void removeTrack(File f) {
+        boolean wasCur = f.getAbsolutePath().equals(curPath);
+        if (f.getName().equals("like_forever.mp3")) sp.edit().putBoolean("defRemoved", true).apply();
+        f.delete();
+        meta.remove(f.getAbsolutePath());
+        tracks = listTracks();
+        if (mp != null) {
+            if (tracks.isEmpty()) { releasePlayer(); curPath = ""; }
+            else if (wasCur) playTrack(Math.min(cur, tracks.size() - 1));
+            else for (int j = 0; j < tracks.size(); j++) if (tracks.get(j).getAbsolutePath().equals(curPath)) cur = j;
+        }
+        musicScreen();
+    }
+
+    String displayName(Uri u) {
+        try (Cursor c = getContentResolver().query(u, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) return c.getString(c.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME));
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    void importMusic(final List<Uri> uris) {
+        toast("Import en cours…");
+        new Thread(() -> {
+            int ok = 0;
+            for (Uri u : uris) {
+                try {
+                    String n = displayName(u);
+                    if (n == null || n.trim().isEmpty()) n = "morceau.mp3";
+                    n = n.replaceAll("[^A-Za-z0-9._ -]", "_");
+                    if (!n.toLowerCase().endsWith(".mp3")) n = n + ".mp3";
+                    File dst = new File(musicDir(), n);
+                    int k = 1;
+                    while (dst.exists()) { dst = new File(musicDir(), (k++) + "_" + n); }
+                    try (InputStream in = getContentResolver().openInputStream(u); OutputStream out = new FileOutputStream(dst)) {
+                        byte[] b = new byte[65536];
+                        int r;
+                        while ((r = in.read(b)) > 0) out.write(b, 0, r);
+                    }
+                    ok++;
+                } catch (Exception ignored) {}
+            }
+            final int done = ok;
+            runOnUiThread(() -> {
+                toast(done + " morceau(x) importé(s)");
+                if (screen.equals("music")) musicScreen();
+            });
+        }).start();
     }
 
     // ---------------------------------------------------------------- pack d'apps (APK inclus dans l'application)
@@ -965,6 +1264,7 @@ public class MainActivity extends Activity {
             bg.invalidate();
             settings();
         }), lp(dp(320), dp(54), dp(12)));
+        c.addView(nbtn("Musique ♪ : " + (sp.getBoolean("music", false) ? "ON" : "OFF"), v -> musicScreen()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Apps de l'accueil", v -> appsScreen("pick")), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Mon OS", v -> os()), lp(dp(320), dp(54), dp(12)));
         if (hasPack()) c.addView(nbtn("Pack d'apps", v -> pack()), lp(dp(320), dp(54), dp(12)));
@@ -1163,6 +1463,15 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == MUSIC_REQ) {
+            if (res != RESULT_OK || data == null) return;
+            List<Uri> us = new ArrayList<>();
+            android.content.ClipData cd = data.getClipData();
+            if (cd != null) { for (int k = 0; k < cd.getItemCount(); k++) us.add(cd.getItemAt(k).getUri()); }
+            else if (data.getData() != null) us.add(data.getData());
+            importMusic(us);
+            return;
+        }
         if (req == FILE_REQ) {
             Uri[] out = (res == RESULT_OK && data != null && data.getData() != null) ? new Uri[]{data.getData()} : null;
             if (fileCb != null) { fileCb.onReceiveValue(out); fileCb = null; }
