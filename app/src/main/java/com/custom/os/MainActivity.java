@@ -31,6 +31,7 @@ import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -65,7 +66,9 @@ public class MainActivity extends Activity {
     Bitmap logo;
     boolean inIntro = false, askPending = false;
     ValueCallback<Uri[]> fileCb;
-    int wall = 0;
+    int wall = 0, fillA = 31, bgOp = 100;
+    static class Pos { float fx, fy; boolean auto = true; String key; }
+    interface IntCb { void on(int v); }
     MediaPlayer mp;
     boolean mpReady = false, userPaused = false, autoPaused = false, focusPaused = false;
     int cur = 0;
@@ -79,9 +82,9 @@ public class MainActivity extends Activity {
             if (ch == AudioManager.AUDIOFOCUS_LOSS || ch == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
                 if (mp.isPlaying()) { mp.pause(); focusPaused = true; }
             } else if (ch == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
-                mp.setVolume(0.25f, 0.25f);
+                mp.setVolume(vf() * 0.25f, vf() * 0.25f);
             } else if (ch == AudioManager.AUDIOFOCUS_GAIN) {
-                mp.setVolume(1f, 1f);
+                mp.setVolume(vf(), vf());
                 if (focusPaused && !userPaused && !autoPaused && mpReady) mp.start();
                 focusPaused = false;
             }
@@ -147,6 +150,8 @@ public class MainActivity extends Activity {
         sp = getSharedPreferences("cos", MODE_PRIVATE);
         loadTheme();
         wall = sp.getInt("wall", 0);
+        fillA = sp.getInt("fillA", 31);
+        bgOp = sp.getInt("bgOp", 100);
         getWindow().setStatusBarColor(DARK);
         getWindow().setNavigationBarColor(DARK);
         logo = loadLogo();
@@ -285,7 +290,7 @@ public class MainActivity extends Activity {
         glow.setCornerRadius(dp(radiusDp + 3));
         glow.setStroke(dp(5), withAlpha(C1, strong ? 0x45 : 0x25));
         GradientDrawable box = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-            new int[]{withAlpha(C1, 0x30), withAlpha(C2, 0x30)});
+            new int[]{withAlpha(C1, fillA * 153 / 100), withAlpha(C2, fillA * 153 / 100)});
         box.setCornerRadius(dp(radiusDp));
         box.setStroke(dp(2), C1);
         LayerDrawable ld = new LayerDrawable(new Drawable[]{glow, box});
@@ -400,7 +405,7 @@ public class MainActivity extends Activity {
             empty.addView(nbtn("Choisir mes apps", v -> appsScreen("pick")), lp(dp(260), dp(54), 0));
             c.addView(empty, new LinearLayout.LayoutParams(-1, 0, 1f));
         } else {
-            c.addView(makeGrid(shown, "home", null), new LinearLayout.LayoutParams(-1, 0, 1f));
+            c.addView(makeDesk(shown), new LinearLayout.LayoutParams(-1, 0, 1f));
         }
 
         LinearLayout dock = new LinearLayout(this);
@@ -446,7 +451,7 @@ public class MainActivity extends Activity {
         final PackageManager pm = getPackageManager();
         GridView g = new GridView(this);
         g.setNumColumns(GridView.AUTO_FIT);
-        g.setColumnWidth(dp(100));
+        g.setColumnWidth(dp(iconDp() + 40));
         g.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
         g.setVerticalSpacing(dp(8));
         g.setSelector(new ColorDrawable(0));
@@ -463,9 +468,11 @@ public class MainActivity extends Activity {
                     cell.setPadding(dp(4), dp(6), dp(4), dp(6));
                     ImageView iv0 = new ImageView(MainActivity.this);
                     iv0.setId(1001);
-                    iv0.setPadding(dp(9), dp(9), dp(9), dp(9));
-                    iv0.setBackground(neonBox(16, false));
-                    cell.addView(iv0, new LinearLayout.LayoutParams(dp(62), dp(62)));
+                    int pd0 = dp(iconDp() * 0.15f);
+                    iv0.setPadding(pd0, pd0, pd0, pd0);
+                    Drawable bg0 = iconBg(iconDp());
+                    if (bg0 != null) iv0.setBackground(bg0);
+                    cell.addView(iv0, new LinearLayout.LayoutParams(dp(iconDp()), dp(iconDp())));
                     TextView tv0 = new TextView(MainActivity.this);
                     tv0.setId(1002);
                     tv0.setTextSize(12); tv0.setTextColor(Color.WHITE);
@@ -474,6 +481,7 @@ public class MainActivity extends Activity {
                     tv0.setEllipsize(android.text.TextUtils.TruncateAt.END);
                     tv0.setShadowLayer(dp(4), 0, 0, C1);
                     tv0.setPadding(0, dp(4), 0, 0);
+                    tv0.setVisibility(sp.getBoolean("ilabels", true) ? View.VISIBLE : View.GONE);
                     cell.addView(tv0, new LinearLayout.LayoutParams(-1, -2));
                     v = cell;
                 }
@@ -676,6 +684,7 @@ public class MainActivity extends Activity {
                 mpReady = true;
                 if (!userPaused && !autoPaused) {
                     try { ((AudioManager) getSystemService(Context.AUDIO_SERVICE)).requestAudioFocus(focusL, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN); } catch (Exception ignored) {}
+                    m.setVolume(vf(), vf());
                     m.start();
                 }
                 refreshPlayerUi();
@@ -689,6 +698,8 @@ public class MainActivity extends Activity {
         }
         refreshPlayerUi();
     }
+
+    float vf() { return sp.getInt("vol", 100) / 100f; }
 
     boolean isPlayingNow() {
         try { return mp != null && mpReady && mp.isPlaying(); } catch (Exception e) { return false; }
@@ -752,6 +763,10 @@ public class MainActivity extends Activity {
         ctl.addView(prev, bp); ctl.addView(ppBtn, bp); ctl.addView(next, bp);
         card.addView(ctl);
         c.addView(card, lp(dp(460), -2, dp(14)));
+        c.addView(sliderRow("Volume", 0, 100, sp.getInt("vol", 100), v -> {
+            sp.edit().putInt("vol", v).apply();
+            try { if (mp != null) mp.setVolume(v / 100f, v / 100f); } catch (Exception ignored) {}
+        }), lp(dp(340), -2, dp(10)));
 
         c.addView(txt("Playlist (" + tracks.size() + ")", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(8)));
         if (tracks.isEmpty()) c.addView(txt("Aucun morceau. Importe des MP3 ci-dessous.", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(12)));
@@ -1229,6 +1244,211 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    // ---------------------------------------------------------------- icones : taille, forme, placement libre
+    int iconDp() { return sp.getInt("isize", 62); }
+
+    Drawable iconBg(int sz) {
+        switch (sp.getInt("ishape", 0)) {
+            case 1: return neonBox(sz / 2f - 3, false);
+            case 2: return neonBox(4, false);
+            case 3: return null;
+            default: return neonBox(16, false);
+        }
+    }
+
+    class Desk extends FrameLayout {
+        final int cw, ch;
+        Desk(Context c, int cw, int ch) { super(c); this.cw = cw; this.ch = ch; }
+
+        @Override protected void onMeasure(int wm, int hm) {
+            super.onMeasure(wm, hm);
+            int a = MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY), b = MeasureSpec.makeMeasureSpec(ch, MeasureSpec.EXACTLY);
+            for (int i = 0; i < getChildCount(); i++) getChildAt(i).measure(a, b);
+        }
+
+        @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            int w = r - l, h = b - t, gap = dp(10), cols = Math.max(1, w / (cw + gap)), n = 0;
+            for (int i = 0; i < getChildCount(); i++) {
+                View c = getChildAt(i);
+                Pos p = (Pos) c.getTag();
+                int x, y;
+                if (p.auto) { x = (n % cols) * (cw + gap); y = (n / cols) * (ch + gap); n++; }
+                else { x = (int) (p.fx * Math.max(0, w - cw)); y = (int) (p.fy * Math.max(0, h - ch)); }
+                c.layout(x, y, x + cw, y + ch);
+            }
+        }
+
+        void freeze() { // fixe les icones encore en placement automatique a leur place actuelle
+            float ax = Math.max(1, getWidth() - cw), ay = Math.max(1, getHeight() - ch);
+            for (int i = 0; i < getChildCount(); i++) {
+                View c = getChildAt(i);
+                Pos p = (Pos) c.getTag();
+                if (p.auto) {
+                    p.fx = Math.max(0f, Math.min(1f, c.getLeft() / ax));
+                    p.fy = Math.max(0f, Math.min(1f, c.getTop() / ay));
+                    p.auto = false;
+                }
+            }
+        }
+
+        void moveTo(View v, float nx, float ny) {
+            freeze();
+            Pos p = (Pos) v.getTag();
+            float ax = Math.max(1, getWidth() - cw), ay = Math.max(1, getHeight() - ch);
+            p.fx = Math.max(0f, Math.min(1f, nx / ax));
+            p.fy = Math.max(0f, Math.min(1f, ny / ay));
+            requestLayout();
+        }
+
+        void drop(View v) {
+            if (sp.getBoolean("snap", false)) {
+                Pos p = (Pos) v.getTag();
+                float ax = Math.max(1, getWidth() - cw), ay = Math.max(1, getHeight() - ch);
+                float sx = cw + dp(10), sy = ch + dp(10);
+                p.fx = Math.max(0f, Math.min(1f, Math.round(p.fx * ax / sx) * sx / ax));
+                p.fy = Math.max(0f, Math.min(1f, Math.round(p.fy * ay / sy) * sy / ay));
+                requestLayout();
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < getChildCount(); i++) {
+                Pos p = (Pos) getChildAt(i).getTag();
+                if (!p.auto) sb.append(p.key).append('=').append(p.fx).append(',').append(p.fy).append('\n');
+            }
+            sp.edit().putString("pos", sb.toString()).apply();
+        }
+    }
+
+    View makeDesk(List<AppItem> shown) {
+        int sz = iconDp();
+        boolean lab = sp.getBoolean("ilabels", true);
+        int cw = dp(sz + 26), ch = dp(sz + (lab ? 26 : 8));
+        Desk desk = new Desk(this, cw, ch);
+        Map<String, float[]> pm = new HashMap<>();
+        for (String ln : sp.getString("pos", "").split("\n")) {
+            int k = ln.indexOf('='), m = ln.indexOf(',');
+            if (k > 0 && m > k) {
+                try { pm.put(ln.substring(0, k), new float[]{Float.parseFloat(ln.substring(k + 1, m)), Float.parseFloat(ln.substring(m + 1))}); }
+                catch (Exception ignored) {}
+            }
+        }
+        PackageManager pk = getPackageManager();
+        for (AppItem a : shown) {
+            Pos p = new Pos();
+            p.key = key(a);
+            float[] f = pm.get(p.key);
+            if (f != null) { p.fx = f[0]; p.fy = f[1]; p.auto = false; }
+            desk.addView(makeCell(a, p, desk, sz, lab, pk), new FrameLayout.LayoutParams(cw, ch));
+        }
+        return desk;
+    }
+
+    View makeCell(final AppItem a, Pos p, final Desk desk, int sz, boolean lab, PackageManager pm) {
+        final LinearLayout cell = new LinearLayout(this);
+        cell.setOrientation(LinearLayout.VERTICAL);
+        cell.setGravity(Gravity.CENTER_HORIZONTAL);
+        cell.setPadding(dp(2), dp(4), dp(2), dp(2));
+        ImageView iv = new ImageView(this);
+        int pd = dp(sz * 0.15f);
+        iv.setPadding(pd, pd, pd, pd);
+        Drawable bgd = iconBg(sz);
+        if (bgd != null) iv.setBackground(bgd);
+        if (a.icon == null) a.icon = a.ri.loadIcon(pm);
+        iv.setImageDrawable(a.icon);
+        cell.addView(iv, new LinearLayout.LayoutParams(dp(sz), dp(sz)));
+        if (lab) {
+            TextView tv = new TextView(this);
+            tv.setText(a.label); tv.setTextSize(12); tv.setTextColor(Color.WHITE);
+            tv.setGravity(Gravity.CENTER); tv.setMaxLines(1);
+            tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            tv.setShadowLayer(dp(4), 0, 0, C1);
+            tv.setPadding(0, dp(4), 0, 0);
+            cell.addView(tv, new LinearLayout.LayoutParams(-1, -2));
+        }
+        cell.setTag(p);
+        final float[] st = new float[4];
+        final boolean[] md = new boolean[2]; // [0] deplacement actif, [1] a bouge
+        final Runnable lpRun = () -> {
+            md[0] = true;
+            cell.bringToFront();
+            cell.setScaleX(1.12f); cell.setScaleY(1.12f);
+            cell.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        };
+        cell.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    md[0] = false; md[1] = false;
+                    st[0] = e.getRawX(); st[1] = e.getRawY(); st[2] = v.getLeft(); st[3] = v.getTop();
+                    ui.postDelayed(lpRun, 380);
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (!md[0]) {
+                        if (Math.hypot(e.getRawX() - st[0], e.getRawY() - st[1]) > dp(10)) ui.removeCallbacks(lpRun);
+                        return true;
+                    }
+                    md[1] = true;
+                    desk.moveTo(v, st[2] + e.getRawX() - st[0], st[3] + e.getRawY() - st[1]);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    ui.removeCallbacks(lpRun);
+                    v.setScaleX(1f); v.setScaleY(1f);
+                    if (md[0]) {
+                        if (md[1]) desk.drop(v); else appMenu(a, "home");
+                    } else { tick(); openApp(a); }
+                    md[0] = false;
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    ui.removeCallbacks(lpRun);
+                    v.setScaleX(1f); v.setScaleY(1f);
+                    md[0] = false;
+                    return true;
+                default:
+                    return false;
+            }
+        });
+        return cell;
+    }
+
+    View sliderRow(final String label, final int min, int max, int val, final IntCb cb) {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.VERTICAL);
+        final TextView t = txt(label + " : " + val, 14, 0xCCFFFFFF, false);
+        r.addView(t, lp(-2, -2, dp(2)));
+        final SeekBar[] sb = new SeekBar[1];
+        sb[0] = seek(max - min, val - min, () -> {
+            int v = sb[0].getProgress() + min;
+            t.setText(label + " : " + v);
+            cb.on(v);
+        });
+        GradientDrawable tr = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{withAlpha(C1, 0x66), withAlpha(C2, 0x66)});
+        tr.setCornerRadius(dp(18));
+        sb[0].setBackground(tr);
+        r.addView(sb[0], lp(dp(320), dp(34), dp(8)));
+        return r;
+    }
+
+    static final String[] SHAPES = {"Carré arrondi", "Rond", "Carré", "Sans fond"};
+
+    void custom() {
+        LinearLayout c = col(Gravity.CENTER_HORIZONTAL);
+        c.addView(txt("Personnalisation", 30, Color.WHITE, true), lp(-2, -2, dp(14)));
+        c.addView(sliderRow("Taille des icônes", 30, 110, iconDp(), v -> sp.edit().putInt("isize", v).apply()), lp(dp(340), -2, dp(10)));
+        c.addView(nbtn("Forme des icônes : " + SHAPES[sp.getInt("ishape", 0)], v -> {
+            sp.edit().putInt("ishape", (sp.getInt("ishape", 0) + 1) % SHAPES.length).apply();
+            custom();
+        }), lp(dp(340), dp(54), dp(12)));
+        c.addView(toggle("Noms des apps", "ilabels"), lp(dp(340), dp(54), dp(12)));
+        c.addView(toggle("Placement aimanté", "snap", false), lp(dp(340), dp(54), dp(12)));
+        c.addView(nbtn("Réinitialiser les positions", v -> {
+            sp.edit().remove("pos").apply();
+            toast("Positions réinitialisées");
+        }), lp(dp(340), dp(54), dp(16)));
+        c.addView(sliderRow("Remplissage des boutons (%)", 0, 100, fillA, v -> { fillA = v; sp.edit().putInt("fillA", v).apply(); }), lp(dp(340), -2, dp(10)));
+        c.addView(sliderRow("Opacité du fond (%)", 0, 100, bgOp, v -> { bgOp = v; sp.edit().putInt("bgOp", v).apply(); bg.invalidate(); }), lp(dp(340), -2, dp(10)));
+        c.addView(txt("Sur l'accueil : appui long sur une icône puis glisse pour la placer où tu veux. Appui long sans bouger : menu de l'app.", 12, 0x99FFFFFF, false), lp(dp(340), -2, dp(14)));
+        c.addView(nbtn("Retour", v -> settings()), lp(dp(340), dp(54), dp(12)));
+        show(scroll(c), "custom");
+    }
+
     // ---------------------------------------------------------------- reglages
     void settings() {
         LinearLayout c = col(Gravity.CENTER_HORIZONTAL);
@@ -1258,6 +1478,7 @@ public class MainActivity extends Activity {
         c.addView(toggle("Intro au démarrage", "intro"), lp(dp(320), dp(54), dp(12)));
         c.addView(toggle("Menu de choix au démarrage", "menu"), lp(dp(320), dp(54), dp(12)));
         c.addView(toggle("Widgets de l'accueil", "widgets"), lp(dp(320), dp(54), dp(12)));
+        c.addView(nbtn("Personnalisation", v -> custom()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Fond d'écran : " + WALLS[wall], v -> {
             wall = (wall + 1) % WALLS.length;
             sp.edit().putInt("wall", wall).apply();
@@ -1278,11 +1499,13 @@ public class MainActivity extends Activity {
         show(scroll(c), "settings");
     }
 
-    TextView toggle(String label, final String key) {
-        final boolean on = sp.getBoolean(key, true);
+    TextView toggle(String label, final String key) { return toggle(label, key, true); }
+
+    TextView toggle(String label, final String key, boolean def) {
+        final boolean on = sp.getBoolean(key, def);
         return nbtn(label + " : " + (on ? "ON" : "OFF"), v -> {
             sp.edit().putBoolean(key, !on).apply();
-            settings();
+            if (screen.equals("custom")) custom(); else settings();
         });
     }
 
@@ -1689,6 +1912,12 @@ public class MainActivity extends Activity {
                 case 4: warp(cv, w, h, t); break;
                 case 5: break;
                 default: grid(cv, w, h, t);
+            }
+            if (bgOp < 100) {
+                p.setStyle(Paint.Style.FILL);
+                p.setShader(null);
+                p.setColor(withAlpha(DARK, (100 - bgOp) * 255 / 100));
+                cv.drawRect(0, 0, w, h, p);
             }
             if (wall != 5) postInvalidateOnAnimation();
         }
