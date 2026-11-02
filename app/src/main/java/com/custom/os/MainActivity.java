@@ -4,12 +4,15 @@ import android.app.Activity;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.AlertDialog;
+import android.app.Dialog;
+import android.app.admin.DevicePolicyManager;
 import android.app.DownloadManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -30,11 +33,13 @@ import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -50,7 +55,7 @@ import java.util.*;
 
 /** COs 1.0 - launcher neon : intro, menu Cocoon/COs, accueil avec apps, reglages */
 public class MainActivity extends Activity {
-    static final int PICK = 1, HOME_REQ = 2, FILE_REQ = 3, MUSIC_REQ = 4;
+    static final int PICK = 1, HOME_REQ = 2, FILE_REQ = 3, MUSIC_REQ = 4, WALL_REQ = 5, ADMIN_REQ = 6;
     static final int DARK = 0xFF05030F;
     static final int[][] THEMES = {
         {0xFF00E5FF, 0xFFD500F9}, {0xFF39FF14, 0xFF00E5FF}, {0xFFFF9100, 0xFFFF1744},
@@ -129,7 +134,8 @@ public class MainActivity extends Activity {
     final BroadcastReceiver installRcv = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent i) { onInstallResult(i); }
     };
-    static final String[] WALLS = {"Grille", "Pluie", "Aurore", "Particules", "Warp", "Sobre"};
+    static final String[] WALLS = {"Grille", "Pluie", "Aurore", "Particules", "Warp", "Sobre", "Image"};
+    static final String[] ACTS = {"Rien", "Tiroir d'apps", "Recherche", "Réglages", "Mon OS", "Musique", "Verrouiller l'écran"};
     final TextView[] wv = new TextView[3];
     final NeonBar[] wb = new NeonBar[3];
     final Runnable widgetTick = new Runnable() {
@@ -142,7 +148,14 @@ public class MainActivity extends Activity {
     String screen = "";
     final Handler ui = new Handler(Looper.getMainLooper());
 
-    static class AppItem { String label, pkg, cls; ResolveInfo ri; Drawable icon; }
+    static class AppItem { String label, pkg, cls, folderId; ResolveInfo ri; Drawable icon; }
+    static class Folder { String id, name; List<String> keys = new ArrayList<>(); }
+    interface StrCb { void on(String s); }
+    public static class AdminRcv extends android.app.admin.DeviceAdminReceiver {}
+    GestureDetector homeGd;
+    Dialog folderDlg;
+    EditText searchEt;
+    int wveil = 25;
 
     // ---------------------------------------------------------------- cycle de vie
     @Override protected void onCreate(Bundle b) {
@@ -152,6 +165,7 @@ public class MainActivity extends Activity {
         wall = sp.getInt("wall", 0);
         fillA = sp.getInt("fillA", 31);
         bgOp = sp.getInt("bgOp", 100);
+        wveil = sp.getInt("wveil", 25);
         getWindow().setStatusBarColor(DARK);
         getWindow().setNavigationBarColor(DARK);
         logo = loadLogo();
@@ -370,6 +384,20 @@ public class MainActivity extends Activity {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setPadding(dp(20), dp(8), dp(20), dp(10));
+        homeGd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onDown(MotionEvent e) { return true; }
+            @Override public boolean onDoubleTap(MotionEvent e) { doAction(sp.getInt("gDouble", 0)); return true; }
+            @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
+                if (e1 == null || e2 == null) return false;
+                float dy = e2.getY() - e1.getY(), dx = e2.getX() - e1.getX();
+                if (Math.abs(dy) > dp(60) && Math.abs(dy) > Math.abs(dx) * 1.3f) {
+                    doAction(dy < 0 ? sp.getInt("gUp", 1) : sp.getInt("gDown", 2));
+                    return true;
+                }
+                return false;
+            }
+        });
+        final View.OnTouchListener gl = (gv, ge) -> { homeGd.onTouchEvent(ge); return true; };
 
         TextClock clk = new TextClock(this);
         clk.setFormat24Hour("HH:mm"); clk.setFormat12Hour("HH:mm");
@@ -377,6 +405,7 @@ public class MainActivity extends Activity {
         clk.setShadowLayer(dp(16), 0, 0, C1);
         clk.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
         clk.setGravity(Gravity.CENTER_HORIZONTAL);
+        clk.setOnTouchListener(gl);
         c.addView(clk, new LinearLayout.LayoutParams(-1, -2));
 
         TextClock dt = new TextClock(this);
@@ -386,17 +415,31 @@ public class MainActivity extends Activity {
         dt.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-1, -2);
         dl.bottomMargin = dp(10);
+        dt.setOnTouchListener(gl);
         c.addView(dt, dl);
         if (sp.getBoolean("widgets", true)) {
             LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(-1, -2);
             wl.bottomMargin = dp(10);
-            c.addView(widgetRow(), wl);
+            View wr = widgetRow();
+            wr.setOnTouchListener(gl);
+            c.addView(wr, wl);
         }
 
         final List<AppItem> all = loadApps();
         final List<AppItem> shown = new ArrayList<>();
-        for (String k : favs())
+        final List<Folder> fls = loadFolders();
+        for (String k : favs()) {
+            boolean inFolder = false;
+            for (Folder fo : fls) if (fo.keys.contains(k)) inFolder = true;
+            if (inFolder) continue;
             for (AppItem a : all) if (key(a).equals(k)) { shown.add(a); break; }
+        }
+        for (Folder fo : fls) {
+            AppItem fi = new AppItem();
+            fi.label = fo.name; fi.pkg = "folder"; fi.cls = fo.id; fi.folderId = fo.id;
+            fi.icon = folderIcon(fo, all);
+            shown.add(fi);
+        }
 
         if (shown.isEmpty()) {
             LinearLayout empty = col(Gravity.CENTER);
@@ -411,15 +454,23 @@ public class MainActivity extends Activity {
         LinearLayout dock = new LinearLayout(this);
         dock.setOrientation(LinearLayout.HORIZONTAL);
         dock.setGravity(Gravity.CENTER_VERTICAL);
-        dockBtn(dock, "Fichiers", v -> pickFile());
+        List<View> dv = dockViews(all);
+        int half = (dv.size() + 1) / 2;
+        for (int di = 0; di < dv.size(); di++) {
+            if (di == half) addDots(dock);
+            dock.addView(dv.get(di));
+        }
+        if (half >= dv.size()) addDots(dock);
+        c.addView(dock, new LinearLayout.LayoutParams(-1, -2));
+        show(c, "home");
+    }
+
+    void addDots(LinearLayout dock) {
         DotsBtn db = new DotsBtn(this);
         db.setOnClickListener(v -> { tick(); appsScreen("drawer"); });
         LinearLayout.LayoutParams dbp = new LinearLayout.LayoutParams(dp(64), dp(64));
         dbp.setMargins(dp(8), dp(8), dp(8), 0);
         dock.addView(db, dbp);
-        dockBtn(dock, "Réglages", v -> settings());
-        c.addView(dock, new LinearLayout.LayoutParams(-1, -2));
-        show(c, "home");
     }
 
     void dockBtn(LinearLayout dock, String s, View.OnClickListener l) {
@@ -498,14 +549,18 @@ public class MainActivity extends Activity {
         g.setOnItemClickListener((p, v, i, id) -> {
             AppItem a = shown.get(i);
             tick();
-            if (mode.equals("pick")) {
+            if (mode.equals("pick") || mode.equals("dock")) {
                 String k = key(a);
                 if (!sel.remove(k)) sel.add(k);
                 ((BaseAdapter) p.getAdapter()).notifyDataSetChanged();
-            } else openApp(a);
+            } else {
+                openApp(a);
+                if (mode.startsWith("folder:") && folderDlg != null) folderDlg.dismiss();
+            }
         });
         g.setOnItemLongClickListener((p, v, i, id) -> {
-            if (!mode.equals("pick")) appMenu(shown.get(i), mode);
+            if (mode.startsWith("folder:")) folderItemMenu(shown.get(i), mode.substring(7));
+            else if (!mode.equals("pick") && !mode.equals("dock")) appMenu(shown.get(i), mode);
             return true;
         });
         return g;
@@ -525,17 +580,18 @@ public class MainActivity extends Activity {
     }
 
     void appsScreen(final String mode) {
-        final boolean pick = mode.equals("pick");
+        final boolean pick = mode.equals("pick") || mode.equals("dock");
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setPadding(dp(20), dp(12), dp(20), dp(10));
-        c.addView(txt(pick ? "Apps de l'accueil" : "Toutes les apps", 26, Color.WHITE, true), lp(-2, -2, dp(6)));
-        if (pick) c.addView(txt("Touche les apps à afficher sur l'accueil", 13, 0xCCFFFFFF, false), lp(-2, -2, dp(10)));
+        c.addView(txt(mode.equals("dock") ? "Apps du dock (5 max)" : (pick ? "Apps de l'accueil" : "Toutes les apps"), 26, Color.WHITE, true), lp(-2, -2, dp(6)));
+        if (pick) c.addView(txt(mode.equals("dock") ? "Touche les apps à mettre dans le dock" : "Touche les apps à afficher sur l'accueil", 13, 0xCCFFFFFF, false), lp(-2, -2, dp(10)));
         EditText q = searchBox(c);
+        searchEt = q;
 
         final List<AppItem> all = loadApps();
         final List<AppItem> shown = new ArrayList<>(all);
-        final Set<String> sel = pick ? new LinkedHashSet<String>(favs()) : null;
+        final Set<String> sel = pick ? new LinkedHashSet<String>(mode.equals("dock") ? cut(sp.getString("dock", ""), '\n') : favs()) : null;
         final GridView g = makeGrid(shown, mode, sel);
         c.addView(g, new LinearLayout.LayoutParams(-1, 0, 1f));
         q.addTextChangedListener(new TextWatcher() {
@@ -552,8 +608,17 @@ public class MainActivity extends Activity {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         if (pick) {
-            dockBtn(bar, "Annuler", v -> home());
+            dockBtn(bar, "Annuler", v -> { if (mode.equals("dock")) custom(); else home(); });
             dockBtn(bar, "Valider", v -> {
+                if (mode.equals("dock")) {
+                    List<String> od = cut(sp.getString("dock", ""), '\n'), nd = new ArrayList<>();
+                    for (String k : od) if (sel.contains(k)) nd.add(k);
+                    for (AppItem a : all) if (sel.contains(key(a)) && !nd.contains(key(a))) nd.add(key(a));
+                    if (nd.size() > 5) { nd = new ArrayList<>(nd.subList(0, 5)); toast("5 apps maximum : les premières sont gardées"); }
+                    sp.edit().putString("dock", android.text.TextUtils.join("\n", nd)).apply();
+                    custom();
+                    return;
+                }
                 List<String> old = favs(), out = new ArrayList<>();
                 for (String k : old) if (sel.contains(k)) out.add(k);
                 for (AppItem a : all) if (sel.contains(key(a)) && !out.contains(key(a))) out.add(key(a));
@@ -1244,6 +1309,317 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    // ---------------------------------------------------------------- dossiers d'apps
+    static List<String> cut(String s, char c) {
+        List<String> o = new ArrayList<>();
+        int a = 0;
+        for (int i = 0; i <= s.length(); i++) {
+            if (i == s.length() || s.charAt(i) == c) { o.add(s.substring(a, i)); a = i + 1; }
+        }
+        return o;
+    }
+
+    List<Folder> loadFolders() {
+        List<Folder> out = new ArrayList<>();
+        for (String ln : cut(sp.getString("folders", ""), '\n')) {
+            List<String> p = cut(ln, '|');
+            if (p.size() < 2 || p.get(0).isEmpty()) continue;
+            Folder f = new Folder();
+            f.id = p.get(0);
+            f.name = p.get(1);
+            for (int i = 2; i < p.size(); i++) if (!p.get(i).isEmpty()) f.keys.add(p.get(i));
+            out.add(f);
+        }
+        return out;
+    }
+
+    void saveFolders(List<Folder> l) {
+        StringBuilder sb = new StringBuilder();
+        for (Folder f : l) {
+            sb.append(f.id).append('|').append(f.name.replace('|', '/').replace('\n', ' '));
+            for (String k : f.keys) sb.append('|').append(k);
+            sb.append('\n');
+        }
+        sp.edit().putString("folders", sb.toString()).apply();
+    }
+
+    String folderOf(String appKey) {
+        for (Folder f : loadFolders()) if (f.keys.contains(appKey)) return f.id;
+        return null;
+    }
+
+    void putInFolder(List<Folder> fl, Folder target, String k) {
+        for (Folder f : fl) f.keys.remove(k);
+        if (!target.keys.contains(k)) target.keys.add(k);
+        saveFolders(fl);
+    }
+
+    void removeFromFolder(String fid, String k) {
+        List<Folder> fl = loadFolders();
+        for (Folder f : new ArrayList<>(fl)) {
+            if (f.id.equals(fid)) { f.keys.remove(k); if (f.keys.isEmpty()) fl.remove(f); }
+        }
+        saveFolders(fl);
+    }
+
+    void askText(String title, String init, final StrCb cb) {
+        final EditText e = new EditText(this);
+        e.setText(init);
+        e.setSingleLine(true);
+        e.setSelection(e.getText().length());
+        new AlertDialog.Builder(this).setTitle(title).setView(e)
+            .setNegativeButton("Annuler", null)
+            .setPositiveButton("OK", (d, w) -> {
+                String t = e.getText().toString().trim();
+                if (!t.isEmpty()) cb.on(t);
+            }).show();
+    }
+
+    void chooseFolder(final AppItem a, final String mode) {
+        final List<Folder> fl = loadFolders();
+        String[] names = new String[fl.size() + 1];
+        for (int i = 0; i < fl.size(); i++) names[i] = fl.get(i).name;
+        names[fl.size()] = "＋ Nouveau dossier…";
+        new AlertDialog.Builder(this).setTitle("Mettre dans…").setItems(names, (dlg, w) -> {
+            if (w < fl.size()) {
+                putInFolder(fl, fl.get(w), key(a));
+                toast("Ajouté au dossier");
+                if (mode.equals("home")) home();
+            } else {
+                askText("Nom du dossier", "Dossier", t -> {
+                    Folder f = new Folder();
+                    f.id = Long.toString(System.currentTimeMillis(), 36);
+                    f.name = t.replace('|', '/');
+                    fl.add(f);
+                    putInFolder(fl, f, key(a));
+                    toast("Dossier créé");
+                    if (mode.equals("home")) home();
+                });
+            }
+        }).show();
+    }
+
+    Drawable folderIcon(Folder f, List<AppItem> all) {
+        int S = 192;
+        Bitmap b = Bitmap.createBitmap(S, S, Bitmap.Config.ARGB_8888);
+        Canvas cv = new Canvas(b);
+        Paint pt = new Paint(Paint.ANTI_ALIAS_FLAG);
+        pt.setStyle(Paint.Style.FILL);
+        pt.setColor(withAlpha(C1, 60));
+        cv.drawRoundRect(8, 8, S - 8, S - 8, 36, 36, pt);
+        pt.setStyle(Paint.Style.STROKE);
+        pt.setStrokeWidth(6);
+        pt.setColor(C1);
+        cv.drawRoundRect(8, 8, S - 8, S - 8, 36, 36, pt);
+        int n = 0;
+        PackageManager pm = getPackageManager();
+        for (String k : f.keys) {
+            if (n >= 4) break;
+            for (AppItem a : all) {
+                if (!key(a).equals(k)) continue;
+                if (a.icon == null) a.icon = a.ri.loadIcon(pm);
+                Drawable.ConstantState cs = a.icon.getConstantState();
+                Drawable d = cs != null ? cs.newDrawable().mutate() : a.icon;
+                int cx = 28 + (n % 2) * 70, cy = 28 + (n / 2) * 70;
+                d.setBounds(cx, cy, cx + 60, cy + 60);
+                d.draw(cv);
+                n++;
+                break;
+            }
+        }
+        return new BitmapDrawable(getResources(), b);
+    }
+
+    void openFolder(final String id) {
+        Folder found = null;
+        for (Folder x : loadFolders()) if (x.id.equals(id)) found = x;
+        if (found == null) return;
+        final Folder fo = found;
+        List<AppItem> all = loadApps();
+        final List<AppItem> items = new ArrayList<>();
+        for (String k : fo.keys) for (AppItem a : all) if (key(a).equals(k)) { items.add(a); break; }
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackground(neonBox(20, true));
+        panel.setPadding(dp(16), dp(14), dp(16), dp(14));
+        panel.addView(txt(fo.name, 22, Color.WHITE, true), lp(-2, -2, dp(10)));
+        if (items.isEmpty()) {
+            panel.addView(txt("Dossier vide.", 13, 0xCCFFFFFF, false), lp(-2, -2, dp(10)));
+        } else {
+            int rows = Math.max(1, Math.min(3, (items.size() + 3) / 4));
+            panel.addView(makeGrid(items, "folder:" + id, null), new LinearLayout.LayoutParams(-1, dp(rows * (iconDp() + 46))));
+        }
+        panel.addView(nbtn("Fermer", v -> { if (folderDlg != null) folderDlg.dismiss(); }), lp(dp(200), dp(46), 0));
+        folderDlg = new Dialog(this, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar);
+        folderDlg.setContentView(panel);
+        if (folderDlg.getWindow() != null) {
+            folderDlg.getWindow().setBackgroundDrawable(new ColorDrawable(0));
+            folderDlg.getWindow().setLayout(dp(520), ViewGroup.LayoutParams.WRAP_CONTENT);
+            folderDlg.getWindow().setDimAmount(0.6f);
+        }
+        folderDlg.show();
+    }
+
+    void folderItemMenu(final AppItem a, final String fid) {
+        new AlertDialog.Builder(this).setTitle(a.label)
+            .setItems(new String[]{"Retirer du dossier", "Infos de l'app", "Désinstaller"}, (dlg, w) -> {
+                if (w == 0) {
+                    removeFromFolder(fid, key(a));
+                    if (folderDlg != null) folderDlg.dismiss();
+                    home();
+                    return;
+                }
+                Uri u = Uri.parse("package:" + a.pkg);
+                Intent i = (w == 1) ? new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, u) : new Intent(Intent.ACTION_DELETE, u);
+                try { startActivity(i); } catch (Exception e) { toast("Action impossible"); }
+            }).show();
+    }
+
+    void folderMenu(final String fid) {
+        new AlertDialog.Builder(this).setTitle("Dossier")
+            .setItems(new String[]{"Renommer", "Supprimer le dossier"}, (dlg, w) -> {
+                List<Folder> fl = loadFolders();
+                Folder t = null;
+                for (Folder f : fl) if (f.id.equals(fid)) t = f;
+                if (t == null) return;
+                if (w == 0) {
+                    final Folder tf = t;
+                    final List<Folder> ff = fl;
+                    askText("Renommer", t.name, nm -> { tf.name = nm.replace('|', '/'); saveFolders(ff); home(); });
+                } else {
+                    fl.remove(t);
+                    saveFolders(fl);
+                    toast("Dossier supprimé (les apps restent installées)");
+                    home();
+                }
+            }).show();
+    }
+
+    // ---------------------------------------------------------------- image de fond
+    File wallFile() { return new File(getFilesDir(), "wall.jpg"); }
+
+    void pickWall() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.setType("image/*");
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        try { startActivityForResult(i, WALL_REQ); } catch (Exception e) { toast("Sélecteur indisponible"); }
+    }
+
+    void importWall(final Uri u) {
+        toast("Import de l'image…");
+        new Thread(() -> {
+            boolean ok = false;
+            try {
+                File tmp = new File(getCacheDir(), "wall_src");
+                try (InputStream in = getContentResolver().openInputStream(u); OutputStream out = new FileOutputStream(tmp)) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                }
+                BitmapFactory.Options o = new BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                BitmapFactory.decodeFile(tmp.getAbsolutePath(), o);
+                int ss = 1;
+                while (Math.max(o.outWidth, o.outHeight) / ss > 2400) ss *= 2;
+                BitmapFactory.Options o2 = new BitmapFactory.Options();
+                o2.inSampleSize = ss;
+                Bitmap bm = BitmapFactory.decodeFile(tmp.getAbsolutePath(), o2);
+                if (bm != null) {
+                    int rot = 0;
+                    try {
+                        int ori = new android.media.ExifInterface(tmp.getAbsolutePath()).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1);
+                        if (ori == 6) rot = 90; else if (ori == 3) rot = 180; else if (ori == 8) rot = 270;
+                    } catch (Exception ignored) {}
+                    if (rot != 0) {
+                        Matrix m = new Matrix();
+                        m.postRotate(rot);
+                        bm = Bitmap.createBitmap(bm, 0, 0, bm.getWidth(), bm.getHeight(), m, true);
+                    }
+                    try (OutputStream out = new FileOutputStream(wallFile())) { ok = bm.compress(Bitmap.CompressFormat.JPEG, 90, out); }
+                }
+                tmp.delete();
+            } catch (Throwable e) { ok = false; }
+            final boolean fin = ok;
+            runOnUiThread(() -> {
+                if (fin) {
+                    wall = 6;
+                    sp.edit().putInt("wall", 6).apply();
+                    bg.rebuildWall();
+                    bg.invalidate();
+                    toast("Image appliquée");
+                } else toast("Image illisible");
+                if (screen.equals("custom")) custom();
+            });
+        }).start();
+    }
+
+    // ---------------------------------------------------------------- gestes
+    void doAction(int a) {
+        switch (a) {
+            case 1: appsScreen("drawer"); break;
+            case 2: appsScreen("drawer"); ui.postDelayed(this::focusSearch, 350); break;
+            case 3: settings(); break;
+            case 4: os(); break;
+            case 5: musicScreen(); break;
+            case 6: lockScreen(); break;
+            default: break;
+        }
+    }
+
+    void focusSearch() {
+        if (searchEt == null || !screen.equals("drawer")) return;
+        searchEt.requestFocus();
+        try { ((InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(searchEt, InputMethodManager.SHOW_IMPLICIT); } catch (Exception ignored) {}
+    }
+
+    void lockScreen() {
+        try {
+            DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+            ComponentName cn = new ComponentName(this, AdminRcv.class);
+            if (dpm.isAdminActive(cn)) { dpm.lockNow(); return; }
+            Intent i = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+            i.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, cn);
+            i.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Nécessaire pour verrouiller l'écran avec un geste.");
+            startActivityForResult(i, ADMIN_REQ);
+        } catch (Exception e) { toast("Verrouillage indisponible"); }
+    }
+
+    // ---------------------------------------------------------------- dock
+    View dockBtnView(String label, View.OnClickListener l) {
+        TextView t = nbtn(label, l);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(50), 1f);
+        p.setMargins(dp(4), dp(8), dp(4), 0);
+        t.setLayoutParams(p);
+        return t;
+    }
+
+    View dockAppView(final AppItem a) {
+        ImageView iv = new ImageView(this);
+        int pd = dp(8);
+        iv.setPadding(pd, pd, pd, pd);
+        Drawable bgd = iconBg(50);
+        if (bgd != null) iv.setBackground(bgd);
+        if (a.icon == null) a.icon = a.ri.loadIcon(getPackageManager());
+        iv.setImageDrawable(a.icon);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(54), dp(54));
+        p.setMargins(dp(4), dp(8), dp(4), 0);
+        iv.setLayoutParams(p);
+        iv.setOnClickListener(v -> { tick(); openApp(a); });
+        return iv;
+    }
+
+    List<View> dockViews(List<AppItem> all) {
+        List<View> out = new ArrayList<>();
+        if (sp.getBoolean("dFiles", true)) out.add(dockBtnView("Fichiers", v -> pickFile()));
+        if (sp.getBoolean("dSettings", true)) out.add(dockBtnView("Réglages", v -> settings()));
+        if (sp.getBoolean("dMenu", false)) out.add(dockBtnView("Menu", v -> menu()));
+        for (String k : cut(sp.getString("dock", ""), '\n')) {
+            if (k.isEmpty()) continue;
+            for (AppItem a : all) if (key(a).equals(k)) { out.add(dockAppView(a)); break; }
+        }
+        return out;
+    }
+
     // ---------------------------------------------------------------- icones : taille, forme, placement libre
     int iconDp() { return sp.getInt("isize", 62); }
 
@@ -1276,6 +1652,11 @@ public class MainActivity extends Activity {
                 else { x = (int) (p.fx * Math.max(0, w - cw)); y = (int) (p.fy * Math.max(0, h - ch)); }
                 c.layout(x, y, x + cw, y + ch);
             }
+        }
+
+        @Override public boolean onTouchEvent(MotionEvent e) {
+            if (homeGd != null) homeGd.onTouchEvent(e);
+            return true;
         }
 
         void freeze() { // fixe les icones encore en placement automatique a leur place actuelle
@@ -1392,8 +1773,8 @@ public class MainActivity extends Activity {
                     ui.removeCallbacks(lpRun);
                     v.setScaleX(1f); v.setScaleY(1f);
                     if (md[0]) {
-                        if (md[1]) desk.drop(v); else appMenu(a, "home");
-                    } else { tick(); openApp(a); }
+                        if (md[1]) desk.drop(v); else if (a.folderId != null) folderMenu(a.folderId); else appMenu(a, "home");
+                    } else { tick(); if (a.folderId != null) openFolder(a.folderId); else openApp(a); }
                     md[0] = false;
                     return true;
                 case MotionEvent.ACTION_CANCEL:
@@ -1442,9 +1823,38 @@ public class MainActivity extends Activity {
             sp.edit().remove("pos").apply();
             toast("Positions réinitialisées");
         }), lp(dp(340), dp(54), dp(16)));
+        c.addView(txt("Fond d'écran", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(8)));
+        c.addView(nbtn("Choisir une image de fond", v -> pickWall()), lp(dp(340), dp(54), dp(12)));
+        if (wallFile().exists()) c.addView(nbtn("Retirer l'image", v -> {
+            wallFile().delete();
+            if (wall == 6) { wall = 0; sp.edit().putInt("wall", 0).apply(); }
+            bg.rebuildWall();
+            bg.invalidate();
+            custom();
+        }), lp(dp(340), dp(54), dp(12)));
+        c.addView(sliderRow("Flou de l'image", 0, 25, sp.getInt("wblur", 6), v -> { sp.edit().putInt("wblur", v).apply(); bg.rebuildWall(); bg.invalidate(); }), lp(dp(340), -2, dp(10)));
+        c.addView(sliderRow("Voile néon (%)", 0, 100, wveil, v -> { wveil = v; sp.edit().putInt("wveil", v).apply(); bg.invalidate(); }), lp(dp(340), -2, dp(16)));
+        c.addView(txt("Dock", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(8)));
+        c.addView(nbtn("Apps du dock", v -> appsScreen("dock")), lp(dp(340), dp(54), dp(12)));
+        c.addView(toggle("Bouton Fichiers", "dFiles", true), lp(dp(340), dp(54), dp(12)));
+        c.addView(toggle("Bouton Réglages", "dSettings", true), lp(dp(340), dp(54), dp(12)));
+        c.addView(toggle("Bouton Menu de démarrage", "dMenu", false), lp(dp(340), dp(54), dp(16)));
+        c.addView(txt("Gestes (sur l'accueil)", 14, 0xCCFFFFFF, false), lp(-2, -2, dp(8)));
+        c.addView(nbtn("Balayer vers le haut : " + ACTS[sp.getInt("gUp", 1)], v -> {
+            sp.edit().putInt("gUp", (sp.getInt("gUp", 1) + 1) % ACTS.length).apply();
+            custom();
+        }), lp(dp(340), dp(54), dp(12)));
+        c.addView(nbtn("Balayer vers le bas : " + ACTS[sp.getInt("gDown", 2)], v -> {
+            sp.edit().putInt("gDown", (sp.getInt("gDown", 2) + 1) % ACTS.length).apply();
+            custom();
+        }), lp(dp(340), dp(54), dp(12)));
+        c.addView(nbtn("Double appui : " + ACTS[sp.getInt("gDouble", 0)], v -> {
+            sp.edit().putInt("gDouble", (sp.getInt("gDouble", 0) + 1) % ACTS.length).apply();
+            custom();
+        }), lp(dp(340), dp(54), dp(16)));
         c.addView(sliderRow("Remplissage des boutons (%)", 0, 100, fillA, v -> { fillA = v; sp.edit().putInt("fillA", v).apply(); }), lp(dp(340), -2, dp(10)));
         c.addView(sliderRow("Opacité du fond (%)", 0, 100, bgOp, v -> { bgOp = v; sp.edit().putInt("bgOp", v).apply(); bg.invalidate(); }), lp(dp(340), -2, dp(10)));
-        c.addView(txt("Sur l'accueil : appui long sur une icône puis glisse pour la placer où tu veux. Appui long sans bouger : menu de l'app.", 12, 0x99FFFFFF, false), lp(dp(340), -2, dp(14)));
+        c.addView(txt("Sur l'accueil : appui long sur une icône puis glisse pour la placer où tu veux. Appui long sans bouger : menu de l'app (épingler, dossier, infos). Les gestes marchent sur l'espace libre, l'horloge et les widgets.", 12, 0x99FFFFFF, false), lp(dp(340), -2, dp(14)));
         c.addView(nbtn("Retour", v -> settings()), lp(dp(340), dp(54), dp(12)));
         show(scroll(c), "custom");
     }
@@ -1480,7 +1890,8 @@ public class MainActivity extends Activity {
         c.addView(toggle("Widgets de l'accueil", "widgets"), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Personnalisation", v -> custom()), lp(dp(320), dp(54), dp(12)));
         c.addView(nbtn("Fond d'écran : " + WALLS[wall], v -> {
-            wall = (wall + 1) % WALLS.length;
+            do { wall = (wall + 1) % WALLS.length; } while (wall == 6 && !wallFile().exists());
+            bg.rebuildWall();
             sp.edit().putInt("wall", wall).apply();
             bg.invalidate();
             settings();
@@ -1610,7 +2021,9 @@ public class MainActivity extends Activity {
     void appMenu(final AppItem a, final String mode) {
         final List<String> fl = favs();
         final boolean pinned = fl.contains(key(a));
-        String[] items = {pinned ? "Retirer de l'accueil" : "Épingler à l'accueil", "Infos de l'app", "Désinstaller"};
+        final String inF = folderOf(key(a));
+        String[] items = {pinned ? "Retirer de l'accueil" : "Épingler à l'accueil",
+            inF != null ? "Retirer du dossier" : "Mettre dans un dossier…", "Infos de l'app", "Désinstaller"};
         new AlertDialog.Builder(this).setTitle(a.label).setItems(items, (dlg, w) -> {
             if (w == 0) {
                 if (pinned) fl.remove(key(a)); else fl.add(key(a));
@@ -1619,11 +2032,17 @@ public class MainActivity extends Activity {
                 if (mode.equals("home")) home();
                 return;
             }
+            if (w == 1) {
+                if (inF != null) { removeFromFolder(inF, key(a)); toast("Retiré du dossier"); if (mode.equals("home")) home(); }
+                else chooseFolder(a, mode);
+                return;
+            }
             Uri u = Uri.parse("package:" + a.pkg);
-            Intent i = (w == 1) ? new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, u) : new Intent(Intent.ACTION_DELETE, u);
+            Intent i = (w == 2) ? new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, u) : new Intent(Intent.ACTION_DELETE, u);
             try { startActivity(i); } catch (Exception e) { toast("Action impossible"); }
         }).show();
     }
+
 
     // Retrouve une app par nom (ou paquet), parmi les apps normales et les launchers
     ResolveInfo find(String key) {
@@ -1686,6 +2105,10 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == WALL_REQ) {
+            if (res == RESULT_OK && data != null && data.getData() != null) importWall(data.getData());
+            return;
+        }
         if (req == MUSIC_REQ) {
             if (res != RESULT_OK || data == null) return;
             List<Uri> us = new ArrayList<>();
@@ -1911,6 +2334,7 @@ public class MainActivity extends Activity {
                 case 3: particles(cv, w, h, t); break;
                 case 4: warp(cv, w, h, t); break;
                 case 5: break;
+                case 6: image(cv, w, h); break;
                 default: grid(cv, w, h, t);
             }
             if (bgOp < 100) {
@@ -1919,7 +2343,47 @@ public class MainActivity extends Activity {
                 p.setColor(withAlpha(DARK, (100 - bgOp) * 255 / 100));
                 cv.drawRect(0, 0, w, h, p);
             }
-            if (wall != 5) postInvalidateOnAnimation();
+            if (wall != 5 && wall != 6) postInvalidateOnAnimation();
+        }
+
+        Bitmap wallBmp;
+
+        @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
+            super.onSizeChanged(w, h, ow, oh);
+            rebuildWall();
+        }
+
+        void rebuildWall() {
+            wallBmp = null;
+            int w = getWidth(), h = getHeight();
+            if (wall != 6 || w <= 0 || h <= 0) return;
+            File f = wallFile();
+            if (!f.exists()) return;
+            try {
+                Bitmap src = BitmapFactory.decodeFile(f.getAbsolutePath());
+                if (src == null) return;
+                float sc = Math.max(w / (float) src.getWidth(), h / (float) src.getHeight());
+                int cw = Math.min(src.getWidth(), Math.round(w / sc)), chh = Math.min(src.getHeight(), Math.round(h / sc));
+                Bitmap crop = Bitmap.createBitmap(src, (src.getWidth() - cw) / 2, (src.getHeight() - chh) / 2, cw, chh);
+                int blur = sp.getInt("wblur", 6);
+                if (blur <= 0) {
+                    wallBmp = Bitmap.createScaledBitmap(crop, w, h, true);
+                } else {
+                    float div = 1f + blur / 2.5f;
+                    Bitmap small = Bitmap.createScaledBitmap(crop, Math.max(8, Math.round(w / div)), Math.max(8, Math.round(h / div)), true);
+                    wallBmp = Bitmap.createScaledBitmap(small, w, h, true);
+                }
+            } catch (Throwable t) { wallBmp = null; }
+        }
+
+        void image(Canvas cv, float w, float h) {
+            if (wallBmp != null) cv.drawBitmap(wallBmp, 0, 0, null);
+            if (wveil > 0) {
+                p.setStyle(Paint.Style.FILL);
+                p.setShader(new LinearGradient(0, 0, w, h, withAlpha(C1, wveil * 150 / 100), withAlpha(C2, wveil * 150 / 100), Shader.TileMode.CLAMP));
+                cv.drawRect(0, 0, w, h, p);
+                p.setShader(null);
+            }
         }
 
         void grid(Canvas cv, float w, float h, float t) {
