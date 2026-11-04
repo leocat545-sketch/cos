@@ -52,12 +52,44 @@ canvas{display:block;margin:0 auto;border:1px solid var(--c1);border-radius:8px;
 .gbrow .nm small{opacity:.7}
 .gbrow button{border:1px solid var(--c1);background:rgba(255,255,255,.06);color:var(--fg);border-radius:8px;font:inherit;font-size:13px;padding:8px 10px;min-height:36px}
 .gbrow button:active{background:var(--c1);color:#05030f}
+#icons{bottom:48px;padding:10px;display:grid;grid-auto-flow:column;grid-template-rows:repeat(auto-fill,96px);grid-auto-columns:88px;gap:2px;align-content:start;justify-content:start}
+.ic{width:84px;height:92px;padding:6px 2px;background:transparent;border:1px solid transparent;border-radius:6px;font-size:12px;overflow:hidden;text-shadow:0 1px 4px #000}
+.ic:hover{background:rgba(255,255,255,.1)}
+.ic.sel{background:rgba(0,229,255,.2);border-color:var(--c1)}
+.ic b{font-size:34px;margin-bottom:2px}
+.win{display:flex;flex-direction:column;width:min(520px,94vw);max-height:calc(100vh - 56px);border-radius:8px;border-width:1px;box-shadow:0 4px 18px rgba(0,0,0,.6)}
+.win.act{box-shadow:0 0 22px var(--c1);border-width:2px}
+.win header{padding:4px 4px 4px 12px;cursor:default;flex:none}
+.win header span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.win header .wb{display:flex;gap:3px}
+.win header button{width:36px;height:28px;font-size:15px;line-height:1;border-radius:4px}
+.win header button.x:hover{background:#e81123;color:#fff}
+.win .body{flex:1;min-height:0;max-height:none}
+.win.max{left:0!important;top:0!important;width:100vw!important;height:calc(100vh - 48px)!important;max-height:none;border-radius:0;border-width:0}
+.rz{position:absolute;right:0;bottom:0;width:22px;height:22px;cursor:nwse-resize;touch-action:none;background:linear-gradient(135deg,transparent 55%,var(--c1) 55% 62%,transparent 62% 72%,var(--c1) 72% 79%,transparent 79%)}
+.win.max .rz{display:none}
+#bar{height:48px;padding:0 6px 0 0;gap:4px;z-index:99998}
+.start{height:48px;border:0;background:linear-gradient(90deg,var(--c1),var(--c2));color:#05030f;font:inherit;font-weight:800;letter-spacing:.08em;padding:0 16px}
+.start.on{filter:brightness(1.25)}
+.chip{border-radius:4px;border-color:transparent;border-bottom:3px solid transparent;height:40px;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.chip.on{background:rgba(255,255,255,.16);border-bottom-color:var(--c1)}
+.chip.mn{opacity:.55}
+#clock{line-height:1.15;text-align:center;font-size:13px;min-width:70px}
+#start{position:fixed;left:0;bottom:48px;width:min(330px,96vw);max-height:calc(100vh - 60px);display:none;flex-direction:column;background:rgba(12,8,36,.97);border:1px solid var(--c1);border-bottom:0;box-shadow:0 0 22px var(--c1);z-index:99999}
+#start.open{display:flex}
+#start input{margin:10px;padding:10px;border-radius:6px;border:1px solid var(--c1);background:#0a0620;color:var(--fg);font:inherit;user-select:text;-webkit-user-select:text}
+#sl{flex:1;overflow-y:auto;padding:0 6px}
+.si{display:flex;gap:12px;align-items:center;width:100%;padding:10px;border:0;background:transparent;color:var(--fg);font:inherit;text-align:left;border-radius:6px}
+.si:hover,.si:active{background:rgba(255,255,255,.12)}
+.si b{font-size:24px;width:30px;text-align:center}
+#start .foot{display:flex;justify-content:flex-end;padding:8px;border-top:1px solid rgba(255,255,255,.15)}
 </style></head>
 <body>
 <div id="wall"></div>
 <div id="icons"></div>
 <div id="wins"></div>
-<div id="bar"><span class="logo">COs</span><div id="tasks"></div><span id="clock"></span><button id="quit">⏻ Quitter</button></div>
+<div id="start"><input id="ss" placeholder="Rechercher une appli…" autocomplete="off"><div id="sl"></div><div class="foot"><button id="quit">⏻ Quitter</button></div></div>
+<div id="bar"><button class="start" id="sb">⊞ COs</button><div id="tasks"></div><span id="clock"></span></div>
 <script>
 var Q=new URLSearchParams(location.search);
 if(Q.get('c1'))document.documentElement.style.setProperty('--c1','#'+Q.get('c1'));
@@ -72,7 +104,7 @@ var z=10,n=0,wins={};
 
 function GB(rom,fb,pal){
   var self=this;
-  var vram=new Uint8Array(0x2000),wram=new Uint8Array(0x2000),oam=new Uint8Array(0xA0),io=new Uint8Array(0x80),hram=new Uint8Array(0x80),ie=0;
+  var vram=new Uint8Array(0x4000),wram=new Uint8Array(0x8000),oam=new Uint8Array(0xA0),io=new Uint8Array(0x80),hram=new Uint8Array(0x80),ie=0;
   var ctype=rom[0x147],nb=Math.max(2,rom.length>>14);
   var mbc=(ctype>=1&&ctype<=3)||ctype==5||ctype==6?1:(ctype>=0x0F&&ctype<=0x13)?3:(ctype>=0x19&&ctype<=0x1E)?5:0;
   var ramKB=[0,0,8,32,128,64][rom[0x149]]||0;
@@ -81,9 +113,18 @@ function GB(rom,fb,pal){
   var romBank=1,ramBank=0,ramEn=false,mode=0,b1=1,b2=0;
   var ttl='';for(var i=0x134;i<0x143;i++){if(rom[i]>31&&rom[i]<127)ttl+=String.fromCharCode(rom[i])}
   this.title=ttl.trim()||'ROM';this.hasBattery=bat;this.dirty=false;this.mbc=mbc;
+  // ---- Game Boy Color
+  var cgb=(rom[0x143]&0x80)!=0,vbk=0,wbk=1,ds=false,bgPal=new Uint8Array(64),objPal=new Uint8Array(64),bgRGB=new Uint32Array(32),objRGB=new Uint32Array(32);
+  var hSrc=0,hDst=0,hLen=0,hOn=false;
+  this.cgb=cgb;
+  function wa(a){a&=0x1FFF;return a<0x1000?a:((wbk<<12)|(a&0xFFF))}
+  function rgb15(lo,hi){var c=lo|(hi<<8),r=c&31,g=(c>>5)&31,b=(c>>10)&31;return (0xFF000000|(((b<<3)|(b>>2))<<16)|(((g<<3)|(g>>2))<<8)|((r<<3)|(r>>2)))>>>0}
+  function hdma(len){for(var i=0;i<len;i++)vram[(vbk<<13)|((hDst+i)&0x1FFF)]=rb((hSrc+i)&0xFFFF);hSrc=(hSrc+len)&0xFFFF;hDst=(hDst+len)&0x1FFF}
+  function palW(pa,rgb,ri,v){var i=io[ri]&0x3F;pa[i]=v;rgb[i>>1]=rgb15(pa[i&62],pa[i|1]);if(io[ri]&0x80)io[ri]=0x80|((i+1)&0x3F)}
   // ---- registres
   var R=new Uint8Array(8),F=0xB0,SP=0xFFFE,PC=0x100,ime=false,imeNext=false,halted=false;
   R[7]=1;R[0]=0;R[1]=0x13;R[2]=0;R[3]=0xD8;R[4]=1;R[5]=0x4D;
+  if(cgb){R[7]=0x11;F=0x80;R[0]=0;R[1]=0;R[2]=0xFF;R[3]=0x56;R[4]=0;R[5]=0x0D;for(var q=0;q<64;q++){bgPal[q]=0xFF;objPal[q]=0xFF}for(q=0;q<32;q++){bgRGB[q]=0xFFFFFFFF;objRGB[q]=0xFFFFFFFF}}
   var div=0xABCC,tcyc=0,lcyc=0,ly=0,pmode=0,frameDone=false,pad=0;
   io[0x40]=0x91;io[0x47]=0xFC;io[0x48]=0xFF;io[0x49]=0xFF;io[0x0F]=0x01;io[0x41]=0x85;
   io[0x26]=0x80;io[0x24]=0x77;io[0x25]=0xF3;io[0x11]=0xBF;io[0x12]=0xF3;
@@ -95,14 +136,14 @@ function GB(rom,fb,pal){
         return rom[((romBank%nb)<<14)+(a-0x4000)];
       case 4:case 5:case 6:case 7:
         return rom[((romBank%nb)<<14)+(a-0x4000)];
-      case 8:case 9:return vram[a&0x1FFF];
+      case 8:case 9:return vram[(vbk<<13)|(a&0x1FFF)];
       case 10:case 11:
         if(!ramEn)return 0xFF;
         if(mbc==3&&ramBank>=8)return 0;
         return eram[(((mbc==1)?(mode?b2:0):ramBank)*0x2000+(a&0x1FFF))%eram.length];
-      case 12:case 13:case 14:return wram[a&0x1FFF];
+      case 12:case 13:case 14:return wram[wa(a)];
       default:
-        if(a<0xFE00)return wram[a&0x1FFF];
+        if(a<0xFE00)return wram[wa(a)];
         if(a<0xFEA0)return oam[a-0xFE00];
         if(a<0xFF00)return 0xFF;
         if(a<0xFF80)return ior(a&0x7F);
@@ -118,6 +159,12 @@ function GB(rom,fb,pal){
       case 0x41:return (io[0x41]&0x78)|0x80|((io[0x40]&0x80)?((ly==io[0x45]?4:0)|pmode):0);
       case 0x44:return ly;
       case 0x26:return (io[0x26]&0x80)|0x70|(c1.on?1:0)|(c2.on?2:0)|(c3.on?4:0)|(c4.on?8:0);
+      case 0x4D:return cgb?((ds?0x80:0)|0x7E|(io[0x4D]&1)):0xFF;
+      case 0x4F:return cgb?(0xFE|vbk):0xFF;
+      case 0x55:return cgb?(hOn?(((hLen>>4)-1)&0x7F):0xFF):0xFF;
+      case 0x69:return cgb?bgPal[io[0x68]&0x3F]:0xFF;
+      case 0x6B:return cgb?objPal[io[0x6A]&0x3F]:0xFF;
+      case 0x70:return cgb?(0xF8|wbk):0xFF;
       default:return io[r];
     }
   }
@@ -133,14 +180,14 @@ function GB(rom,fb,pal){
         if(mbc==1){b2=v&3;romBank=(b2<<5)|b1}else ramBank=v&(mbc==5?15:15);
         return;
       case 6:case 7:if(mbc==1)mode=v&1;return;
-      case 8:case 9:vram[a&0x1FFF]=v;return;
+      case 8:case 9:vram[(vbk<<13)|(a&0x1FFF)]=v;return;
       case 10:case 11:
         if(!ramEn)return;
         if(mbc==3&&ramBank>=8)return;
         eram[(((mbc==1)?(mode?b2:0):ramBank)*0x2000+(a&0x1FFF))%eram.length]=v;self.dirty=true;return;
-      case 12:case 13:case 14:wram[a&0x1FFF]=v;return;
+      case 12:case 13:case 14:wram[wa(a)]=v;return;
       default:
-        if(a<0xFE00){wram[a&0x1FFF]=v;return}
+        if(a<0xFE00){wram[wa(a)]=v;return}
         if(a<0xFEA0){oam[a-0xFE00]=v;return}
         if(a<0xFF00)return;
         if(a<0xFF80){iow(a&0x7F,v);return}
@@ -160,6 +207,18 @@ function GB(rom,fb,pal){
       case 0x41:io[0x41]=(io[0x41]&7)|(v&0x78);return;
       case 0x44:ly=0;return;
       case 0x46:{var s=v<<8;for(var i=0;i<160;i++)oam[i]=rb(s+i);io[0x46]=v;return}
+      case 0x4D:if(cgb)io[0x4D]=v&1;return;
+      case 0x4F:if(cgb)vbk=v&1;return;
+      case 0x51:hSrc=(hSrc&0xFF)|(v<<8);return;
+      case 0x52:hSrc=(hSrc&0xFF00)|(v&0xF0);return;
+      case 0x53:hDst=(hDst&0xFF)|((v&0x1F)<<8);return;
+      case 0x54:hDst=(hDst&0xFF00)|(v&0xF0);return;
+      case 0x55:{if(!cgb)return;if(hOn&&!(v&0x80)){hOn=false;return}hLen=((v&0x7F)+1)<<4;if(v&0x80)hOn=true;else{hdma(hLen);hLen=0}return}
+      case 0x68:io[0x68]=v;return;
+      case 0x6A:io[0x6A]=v;return;
+      case 0x69:if(cgb)palW(bgPal,bgRGB,0x68,v);return;
+      case 0x6B:if(cgb)palW(objPal,objRGB,0x6A,v);return;
+      case 0x70:if(cgb)wbk=(v&7)||1;return;
       default:if(r>=0x10&&r<=0x26){apuW(r,v);return}io[r]=v;
     }
   }
@@ -228,7 +287,7 @@ function GB(rom,fb,pal){
       case 0x17:v=(F&0x10)?1:0;F=(R[7]&0x80)?0x10:0;R[7]=(R[7]<<1)|v;return 4;
       case 0x1F:v=(F&0x10)?0x80:0;F=(R[7]&1)?0x10:0;R[7]=(R[7]>>1)|v;return 4;
       case 0x08:a=f16();wb(a,SP&255);wb((a+1)&0xFFFF,SP>>8);return 20;
-      case 0x10:f8();return 4;
+      case 0x10:f8();if(cgb&&(io[0x4D]&1)){ds=!ds;io[0x4D]&=~1;div=0}return 4;
       case 0x18:e=(f8()<<24)>>24;PC=(PC+e)&0xFFFF;return 12;
       case 0x27:
         a=R[7];v=!!(F&0x10);
@@ -404,7 +463,42 @@ function GB(rom,fb,pal){
     if((m==0&&(io[0x41]&8))||(m==1&&(io[0x41]&0x10))||(m==2&&(io[0x41]&0x20)))io[0x0F]|=2;
   }
   var bgci=new Uint8Array(160),spr=[];
+  var bgpri=new Uint8Array(160);
+  function renderLineC(){
+    var lcdc=io[0x40],o=ly*160,x,ci,scy=io[0x42],scx=io[0x43],wy=io[0x4A],wx=io[0x4B];
+    var win=(lcdc&0x20)&&ly>=wy&&wx<=166;
+    for(x=0;x<160;x++){
+      var px,py,base;
+      if(win&&x>=wx-7){px=x-(wx-7);py=ly-wy;base=(lcdc&0x40)?0x1C00:0x1800}
+      else{px=(x+scx)&255;py=(ly+scy)&255;base=(lcdc&8)?0x1C00:0x1800}
+      var mi=base+(py>>3)*32+(px>>3),tile=vram[mi],at=vram[0x2000+mi];
+      var ty=(at&0x40)?7-(py&7):(py&7),bit=(at&0x20)?(px&7):7-(px&7);
+      var ad=((lcdc&0x10)?tile*16:0x1000+((tile<<24)>>24)*16)+ty*2+((at&8)?0x2000:0);
+      ci=(((vram[ad+1]>>bit)&1)<<1)|((vram[ad]>>bit)&1);
+      bgci[x]=ci;bgpri[x]=at&0x80;fb[o+x]=bgRGB[((at&7)<<2)|ci];
+    }
+    if(lcdc&2){
+      var h=(lcdc&4)?16:8;spr.length=0;
+      for(var s=0;s<40&&spr.length<10;s++){var sy=oam[s*4]-16;if(ly>=sy&&ly<sy+h)spr.push(s)}
+      spr.sort(function(p,q){return q-p});
+      for(var k=0;k<spr.length;k++){
+        var n=spr[k]*4,sy2=oam[n]-16,sx=oam[n+1]-8,tn=oam[n+2],fl=oam[n+3];
+        var row=ly-sy2;if(fl&0x40)row=h-1-row;
+        if(h==16)tn&=0xFE;
+        var ad2=(tn*16)+row*2+((fl&8)?0x2000:0),lo=vram[ad2],hi=vram[ad2+1];
+        for(var px2=0;px2<8;px2++){
+          var xx=sx+px2;if(xx<0||xx>=160)continue;
+          var b2=(fl&0x20)?px2:7-px2;
+          ci=(((hi>>b2)&1)<<1)|((lo>>b2)&1);
+          if(ci==0)continue;
+          if((lcdc&1)&&bgci[xx]!=0&&((fl&0x80)||bgpri[xx]))continue;
+          fb[o+xx]=objRGB[((fl&7)<<2)|ci];
+        }
+      }
+    }
+  }
   function renderLine(){
+    if(cgb){renderLineC();return}
     var lcdc=io[0x40],o=ly*160,bgp=io[0x47],x,ci,c;
     var scy=io[0x42],scx=io[0x43],wy=io[0x4A],wx=io[0x4B];
     for(x=0;x<160;x++)bgci[x]=0;
@@ -457,7 +551,7 @@ function GB(rom,fb,pal){
     if(ly<144){
       if(lcyc<80){if(pmode!=2)setMode(2)}
       else if(lcyc<252){if(pmode!=3)setMode(3)}
-      else if(pmode!=0){setMode(0);renderLine()}
+      else if(pmode!=0){setMode(0);renderLine();if(hOn){hdma(16);hLen-=16;if(hLen<=0){hLen=0;hOn=false}}}
     }
   }
   function step(){
@@ -474,13 +568,13 @@ function GB(rom,fb,pal){
       tcyc+=c;var per=[1024,16,64,256][io[0x07]&3];
       while(tcyc>=per){tcyc-=per;var t=io[0x05]+1;if(t>255){t=io[0x06];io[0x0F]|=4}io[0x05]=t}
     }
-    ppuStep(c);
-    if(self.audio)apuRun(c);
+    var pcy=ds?c>>1:c;ppuStep(pcy);
+    if(self.audio)apuRun(pcy);
     return c;
   }
   this.frame=function(){
     var n=0;frameDone=false;
-    while(!frameDone&&n<140000){n+=step()}
+    while(!frameDone&&n<300000){n+=step()}
     this.frames++;
   };
   this.press=function(bit,down){
@@ -493,6 +587,7 @@ function GB(rom,fb,pal){
     return JSON.stringify({v:1,t:rom.length,R:Array.from(R),F:F,SP:SP,PC:PC,ime:ime,imeNext:imeNext,halted:halted,
       div:div,tcyc:tcyc,lcyc:lcyc,ly:ly,pmode:pmode,ie:ie,rb:romBank,ab:ramBank,ae:ramEn,mo:mode,b1:b1,b2:b2,
       vram:b64(vram),wram:b64(wram),oam:b64(oam),io:b64(io),hram:b64(hram),eram:b64(eram),
+      vbk:vbk,wbk:wbk,ds:ds,bp:b64(bgPal),op:b64(objPal),hs:hSrc,hd:hDst,hl:hLen,ho:hOn,
       c1:c1,c2:c2,c3:c3,c4:c4,seq:seq,seqCyc:seqCyc,smpCyc:smpCyc,cl:capL,cr:capR});
   };
   this.loadState=function(js){
@@ -502,6 +597,7 @@ function GB(rom,fb,pal){
     div=o.div;tcyc=o.tcyc;lcyc=o.lcyc;ly=o.ly;pmode=o.pmode;ie=o.ie;
     romBank=o.rb;ramBank=o.ab;ramEn=o.ae;mode=o.mo;b1=o.b1;b2=o.b2;
     unb64(o.vram,vram);unb64(o.wram,wram);unb64(o.oam,oam);unb64(o.io,io);unb64(o.hram,hram);unb64(o.eram,eram);
+    if(cgb&&o.bp){vbk=o.vbk|0;wbk=o.wbk||1;ds=!!o.ds;unb64(o.bp,bgPal);unb64(o.op,objPal);for(var q=0;q<32;q++){bgRGB[q]=rgb15(bgPal[q*2],bgPal[q*2+1]);objRGB[q]=rgb15(objPal[q*2],objPal[q*2+1])}hSrc=o.hs|0;hDst=o.hd|0;hLen=o.hl|0;hOn=!!o.ho}
     Object.assign(c1,o.c1);Object.assign(c2,o.c2);Object.assign(c3,o.c3);Object.assign(c4,o.c4);
     seq=o.seq;seqCyc=o.seqCyc;smpCyc=o.smpCyc;capL=o.cl||0;capR=o.cr||0;frameDone=false;self.dirty=true;
     return true;
@@ -579,13 +675,13 @@ snake:{t:'Snake',i:'🐍',make:function(b,o){
   [['◀',-1,0],['▲',0,-1],['▼',0,1],['▶',1,0]].forEach(function(a){
     var k=el('button','k',a[0]);k.style.width='54px';k.onclick=function(){go(a[1],a[2])};r.appendChild(k)});
   b.appendChild(r);rs();var iv=setInterval(st,130);o.stop=function(){clearInterval(iv)}}}
-,gb:{t:'Game Boy',i:'🎮',w:372,make:function(b,o){
+,gb:{t:'Game Boy Color',i:'🎮',w:372,make:function(b,o){
   var cv=el('canvas');cv.width=160;cv.height=144;cv.style.cssText='width:100%;max-width:calc(34vh * 1.111);image-rendering:pixelated;aspect-ratio:160/144';
   var ctx=cv.getContext('2d'),img=ctx.createImageData(160,144),fb=new Uint32Array(img.data.buffer),pal=new Uint32Array(4);
   var curKey='',panel='',ft=0,delKey='',g=null,rom=null,pi=2,raf=0,last=0,acc=0,fr=0,lf=-1,key='',ac=null,spn=null,muted=false,SPD=[1,2,4],si=0,ffh=false,ffg=false,gpPrev=0,gpTxt='';
-  var st=el('div','gbst','Charge une ROM (.gb) pour jouer'),pn=el('div','gbp');
+  var st=el('div','gbst','Charge une ROM (.gb / .gbc) pour jouer'),pn=el('div','gbp');
   function mult(){return (ffh||ffg)?4:SPD[si]}
-  function stText(){st.textContent=(g?g.title+(g.hasBattery?' · sauvegarde auto':''):'Charge une ROM (.gb) pour jouer')+gpTxt}
+  function stText(){st.textContent=(g?g.title+(g.hasBattery?' · sauvegarde auto':''):'Charge une ROM (.gb / .gbc) pour jouer')+gpTxt}
   function hex2(c){var m=/([0-9a-f]{6})/i.exec(c);var n=m?parseInt(m[1],16):16777215;return [n>>16&255,n>>8&255,n&255]}
   function mix(a,c,t){return [0,1,2].map(function(i){return Math.round(a[i]*(1-t)+c[i]*t)})}
   var PS=[['Classique',[[224,248,208],[136,192,112],[52,104,86],[8,24,32]]],['Gris',[[255,255,255],[170,170,170],[85,85,85],[0,0,0]]],['Néon',null]];
@@ -773,32 +869,58 @@ snake:{t:'Snake',i:'🐍',make:function(b,o){
   o.stop=function(){cancelAnimationFrame(raf);removeEventListener('keydown',kd);removeEventListener('keyup',ku);removeEventListener('gamepadconnected',gc);removeEventListener('gamepaddisconnected',gd);autoSave();save();if(spn){spn.onaudioprocess=null;try{spn.disconnect()}catch(e){}}if(ac){try{ac.close()}catch(e){}}}}}
 };
 
+var act=null;
 function tasks(){
   var t=$('#tasks');t.innerHTML='';
   Object.keys(wins).forEach(function(id){
-    var c=el('button','chip',APPS[id].i+' '+APPS[id].t);
-    c.onclick=function(){wins[id].el.style.zIndex=++z};t.appendChild(c)})}
-
+    var w=wins[id],c=el('button','chip'+(w.min?' mn':(act===id?' on':'')),APPS[id].i+' '+APPS[id].t);
+    c.onclick=function(){if(w.min)restore(id);else if(act===id)minim(id);else foc(id)};t.appendChild(c)})}
+function foc(id){act=id;Object.keys(wins).forEach(function(k){wins[k].el.classList.toggle('act',k===id)});wins[id].el.style.zIndex=++z;tasks()}
+function minim(id){wins[id].min=true;wins[id].el.style.display='none';act=null;tasks()}
+function restore(id){wins[id].min=false;wins[id].el.style.display='';foc(id)}
+function togMax(id){wins[id].el.classList.toggle('max')}
+function closeStart(){$('#start').classList.remove('open');$('#sb').classList.remove('on')}
 function openApp(id){
-  if(wins[id]){wins[id].el.style.zIndex=++z;return}
+  closeStart();
+  if(wins[id]){if(wins[id].min)restore(id);else foc(id);return}
   var a=APPS[id],w=el('div','win'),h=el('header'),o={};
   if(a.w)w.style.width='min('+a.w+'px,96vw)';
   h.appendChild(el('span','',a.i+' '+a.t));
-  var x=el('button','',"✕");h.appendChild(x);
-  var b=el('div','body');w.appendChild(h);w.appendChild(b);
-  w.style.left=((n*34)%220+24)+'px';w.style.top=((n*34)%160+20)+'px';w.style.zIndex=++z;n++;
+  var wb=el('div','wb'),bm=el('button','','—'),bx=el('button','','☐'),x=el('button','x','✕');
+  wb.appendChild(bm);wb.appendChild(bx);wb.appendChild(x);h.appendChild(wb);
+  var b=el('div','body'),rz=el('div','rz');w.appendChild(h);w.appendChild(b);w.appendChild(rz);
+  w.style.left=((n*34)%220+24)+'px';w.style.top=((n*34)%160+20)+'px';n++;
   a.make(b,o);
-  x.onclick=function(){if(o.stop)o.stop();w.remove();delete wins[id];tasks()};
+  wins[id]={el:w,o:o,min:false};$('#wins').appendChild(w);foc(id);
+  x.onclick=function(){if(o.stop)o.stop();w.remove();delete wins[id];if(act===id)act=null;tasks()};
+  bm.onclick=function(){minim(id)};bx.onclick=function(){togMax(id)};
+  h.ondblclick=function(e){if(!wb.contains(e.target))togMax(id)};
+  w.onpointerdown=function(){if(act!==id&&wins[id])foc(id)};
   var dx=0,dy=0,dr=false;
-  h.onpointerdown=function(e){if(e.target===x)return;dr=true;dx=e.clientX-w.offsetLeft;dy=e.clientY-w.offsetTop;w.style.zIndex=++z;h.setPointerCapture(e.pointerId)};
-  h.onpointermove=function(e){if(dr){w.style.left=(e.clientX-dx)+'px';w.style.top=Math.max(0,e.clientY-dy)+'px'}};
+  h.onpointerdown=function(e){if(wb.contains(e.target)||w.classList.contains('max'))return;dr=true;dx=e.clientX-w.offsetLeft;dy=e.clientY-w.offsetTop;h.setPointerCapture(e.pointerId)};
+  h.onpointermove=function(e){if(dr){w.style.left=Math.min(innerWidth-60,e.clientX-dx)+'px';w.style.top=Math.min(innerHeight-90,Math.max(0,e.clientY-dy))+'px'}};
   h.onpointerup=h.onpointercancel=function(){dr=false};
-  $('#wins').appendChild(w);wins[id]={el:w,o:o};tasks()}
+  var rs=false,sx=0,sy=0,sw=0,sh=0;
+  rz.onpointerdown=function(e){rs=true;sx=e.clientX;sy=e.clientY;sw=w.offsetWidth;sh=w.offsetHeight;rz.setPointerCapture(e.pointerId);e.stopPropagation()};
+  rz.onpointermove=function(e){if(rs){w.style.width=Math.max(240,sw+e.clientX-sx)+'px';w.style.height=Math.max(160,sh+e.clientY-sy)+'px'}};
+  rz.onpointerup=rz.onpointercancel=function(){rs=false}}
 
+function fillStart(q){var l=$('#sl');l.innerHTML='';q=(q||'').toLowerCase();
+  Object.keys(APPS).forEach(function(id){if(q&&APPS[id].t.toLowerCase().indexOf(q)<0)return;
+    var b=el('button','si');b.innerHTML='<b>'+APPS[id].i+'</b>'+APPS[id].t;b.onclick=function(){openApp(id)};l.appendChild(b)})}
+$('#sb').onclick=function(){var s=$('#start'),o=!s.classList.contains('open');if(o){$('#ss').value='';fillStart('')}s.classList.toggle('open',o);$('#sb').classList.toggle('on',o);if(o&&!matchMedia('(pointer:coarse)').matches)$('#ss').focus()};
+$('#ss').oninput=function(){fillStart(this.value)};
+$('#ss').onkeydown=function(e){if(e.key==='Enter'){var f=$('#sl .si');if(f)f.click()}};
+addEventListener('pointerdown',function(e){if(!e.target.closest('#start,#sb'))closeStart()});
+addEventListener('keydown',function(e){if(e.key==='Escape')closeStart()});
+var ics=[],coarse=matchMedia('(pointer:coarse)').matches;
 Object.keys(APPS).forEach(function(id){
-  var b=el('button','ic');b.innerHTML='<b>'+APPS[id].i+'</b>'+APPS[id].t;b.onclick=function(){openApp(id)};$('#icons').appendChild(b)});
+  var b=el('button','ic');b.innerHTML='<b>'+APPS[id].i+'</b>'+APPS[id].t;
+  b.onclick=function(){ics.forEach(function(i){i.classList.remove('sel')});b.classList.add('sel');if(coarse)openApp(id)};
+  b.ondblclick=function(){openApp(id)};ics.push(b);$('#icons').appendChild(b)});
+$('#icons').onpointerdown=function(e){if(e.target.id==='icons')ics.forEach(function(i){i.classList.remove('sel')})};
 $('#quit').onclick=function(){Object.keys(wins).forEach(function(id){var o=wins[id].o;if(o&&o.stop)try{o.stop()}catch(e){}});setTimeout(function(){if(window.Android)Android.exit()},400)};
-setInterval(function(){var d=new Date();$('#clock').textContent=pad(d.getHours())+':'+pad(d.getMinutes())},1000);
-(function(){var d=new Date();$('#clock').textContent=pad(d.getHours())+':'+pad(d.getMinutes())})();
+function tick(){var d=new Date();$('#clock').innerHTML=pad(d.getHours())+':'+pad(d.getMinutes())+'<br><small>'+pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear()+'</small>'}
+setInterval(tick,1000);tick();
 </script>
 </body></html>
